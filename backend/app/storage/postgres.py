@@ -326,13 +326,10 @@ async def upsert_job_from_dict(
 
 async def start_run(conn: asyncpg.Connection, criteria_json: str = "") -> int:
     """Start a new scrape run and return its ID."""
-    import json
-    from asyncpg.types import Json
-
-    criteria = json.loads(criteria_json) if criteria_json else {}
+    criteria_str = criteria_json or "{}"
     row = await conn.fetchrow(
-        "INSERT INTO runs (criteria) VALUES ($1) RETURNING run_id",
-        Json(criteria)
+        "INSERT INTO runs (criteria) VALUES ($1::jsonb) RETURNING run_id",
+        criteria_str,
     )
     return row["run_id"]
 
