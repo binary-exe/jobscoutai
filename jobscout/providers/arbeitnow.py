@@ -80,7 +80,8 @@ class ArbeitnowProvider(Provider):
                 remote_type = RemoteType.REMOTE if is_remote else RemoteType.from_text(location)
 
                 # Posted date
-                posted_str = normalize_text(j.get("created_at", "") or j.get("posted_at", ""))
+                created_val = j.get("created_at", "") or j.get("posted_at", "")
+                posted_str = normalize_text(str(created_val or ""))
                 posted_at = parse_date(posted_str)
 
                 # Tags
