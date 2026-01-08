@@ -40,8 +40,9 @@ class RemotiveProvider(Provider):
         """Collect jobs from Remotive API."""
         self.reset_stats()
 
+        # Remotive supports `search`. `limit` is inconsistently supported, so we omit it for reliability.
         q = urllib.parse.quote(criteria.primary_query)
-        url = f"https://remotive.com/api/remote-jobs?search={q}&limit={criteria.max_results_per_source}"
+        url = f"https://remotive.com/api/remote-jobs?search={q}"
 
         result = await fetcher.fetch_json(url)
         if not result.ok or not result.json_data:

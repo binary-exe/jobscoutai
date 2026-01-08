@@ -67,8 +67,12 @@ class ArbeitnowProvider(Provider):
                 job_url = canonicalize_url(j.get("url", ""))
                 description = strip_html(j.get("description", ""))
 
-                # Job type
-                job_type_raw = normalize_text(j.get("job_type", "") or j.get("job_types", ""))
+                # Job type (API sometimes returns list in job_types)
+                job_type_val = j.get("job_type", "") or j.get("job_types", "")
+                if isinstance(job_type_val, list):
+                    job_type_raw = normalize_text(" ".join(str(x) for x in job_type_val if x))
+                else:
+                    job_type_raw = normalize_text(str(job_type_val or ""))
                 employment_types = [EmploymentType.from_text(job_type_raw)]
 
                 # Remote status

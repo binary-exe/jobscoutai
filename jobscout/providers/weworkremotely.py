@@ -59,8 +59,10 @@ class WWRRssProvider(Provider):
         for item in items[:criteria.max_results_per_source]:
             try:
                 # Title format is often "Company - Job Title"
-                raw_title = normalize_text(item.findtext("title") or "")
-                link = canonicalize_url(item.findtext("link") or "")
+                title_tag = item.find("title")
+                link_tag = item.find("link")
+                raw_title = normalize_text(title_tag.get_text() if title_tag else "")
+                link = canonicalize_url(link_tag.get_text() if link_tag else "")
 
                 if not raw_title or not link:
                     continue
@@ -81,15 +83,25 @@ class WWRRssProvider(Provider):
                     company = "Unknown"
 
                 # Description
-                desc_html = item.findtext("description") or ""
+                desc_tag = item.find("description")
+                desc_html = desc_tag.get_text() if desc_tag else ""
                 description = strip_html(desc_html)
 
                 # Category/region
-                category = normalize_text(item.findtext("category") or "")
-                region = normalize_text(item.findtext("region") or "")
+                category_tag = item.find("category")
+                category = normalize_text(category_tag.get_text() if category_tag else "")
+                # Some feeds have multiple categories
+                if not category:
+                    categories = item.find_all("category") or []
+                    if categories:
+                        category = normalize_text(categories[0].get_text() or "")
+
+                region_tag = item.find("region")
+                region = normalize_text(region_tag.get_text() if region_tag else "")
 
                 # Posted date
-                pub_date = normalize_text(item.findtext("pubDate") or "")
+                pub_tag = item.find("pubDate")
+                pub_date = normalize_text(pub_tag.get_text() if pub_tag else "")
                 posted_at = parse_date(pub_date)
 
                 # Extract type from category
