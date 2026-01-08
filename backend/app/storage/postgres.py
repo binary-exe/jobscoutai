@@ -128,6 +128,21 @@ async def upsert_job_from_dict(
                 return []
         return []
 
+    # Parse ISO timestamp strings to datetime objects for asyncpg
+    def parse_dt(val):
+        if val is None:
+            return None
+        if isinstance(val, datetime):
+            return val
+        if isinstance(val, str):
+            # Handle "Z" and "+00:00" formats
+            s = val.replace("Z", "+00:00")
+            try:
+                return datetime.fromisoformat(s)
+            except ValueError:
+                return None
+        return None
+
     # Check if exists
     existing = await conn.fetchval(
         "SELECT job_id FROM jobs WHERE job_id = $1",
@@ -216,8 +231,8 @@ async def upsert_job_from_dict(
             parse_array(job.get("other_urls")),
             parse_array(job.get("tags")),
             job.get("founder"),
-            job.get("posted_at"),
-            job.get("expires_at"),
+            parse_dt(job.get("posted_at")),
+            parse_dt(job.get("expires_at")),
             now,
             job.get("ai_score"),
             job.get("ai_reasons"),
@@ -289,8 +304,8 @@ async def upsert_job_from_dict(
             parse_array(job.get("other_urls")),
             parse_array(job.get("tags")),
             job.get("founder"),
-            job.get("posted_at"),
-            job.get("expires_at"),
+            parse_dt(job.get("posted_at")),
+            parse_dt(job.get("expires_at")),
             now,
             now,
             job.get("ai_score"),
