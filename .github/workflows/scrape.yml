@@ -1,0 +1,38 @@
+# Scheduled job scrape workflow
+# Triggers a scrape run every 6 hours via GitHub Actions
+
+name: Scheduled Scrape
+
+on:
+  schedule:
+    # Run at 00:00, 06:00, 12:00, 18:00 UTC
+    - cron: '0 */6 * * *'
+  workflow_dispatch:
+    inputs:
+      query:
+        description: 'Search query'
+        required: false
+        default: 'automation engineer'
+      use_ai:
+        description: 'Enable AI features'
+        required: false
+        default: 'true'
+
+jobs:
+  scrape:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger scrape
+        run: |
+          curl -X POST "${{ secrets.API_URL }}/admin/run" \
+            -H "Authorization: Bearer ${{ secrets.ADMIN_TOKEN }}" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "query": "${{ github.event.inputs.query || 'automation engineer' }}",
+              "location": "Remote",
+              "use_ai": ${{ github.event.inputs.use_ai || 'true' }}
+            }' \
+            --fail --show-error
+        env:
+          API_URL: ${{ secrets.API_URL }}
+          ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}

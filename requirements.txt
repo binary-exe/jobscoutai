@@ -1,0 +1,9 @@
+# JobScout - Install the package in development mode
+-e .
+
+# This installs jobscout with its core dependencies from pyproject.toml.
+# For optional features, use:
+#   pip install -e ".[browser]"     # Browser automation
+#   pip install -e ".[ai]"          # OpenAI AI features
+#   pip install -e ".[discovery]"   # DuckDuckGo discovery
+#   pip install -e ".[all]"         # All optional features

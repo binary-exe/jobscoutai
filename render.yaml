@@ -1,0 +1,25 @@
+# Render Blueprint for JobScout
+# Deploy with: render blueprint launch
+
+services:
+  - type: web
+    name: jobscout-api
+    env: python
+    plan: free
+    buildCommand: pip install ".[all]" && pip install -r backend/requirements.txt
+    startCommand: uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: JOBSCOUT_USE_SQLITE
+        value: "false"
+      - key: JOBSCOUT_DEBUG
+        value: "false"
+      - key: JOBSCOUT_DATABASE_URL
+        sync: false
+      - key: JOBSCOUT_ADMIN_TOKEN
+        generateValue: true
+      - key: JOBSCOUT_CORS_ORIGINS
+        sync: false
+      - key: JOBSCOUT_OPENAI_API_KEY
+        sync: false
+      - key: JOBSCOUT_AI_ENABLED
+        value: "true"
