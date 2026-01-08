@@ -57,6 +57,25 @@ export interface Stats {
   last_run_jobs_new: number;
 }
 
+export interface ScrapeResponse {
+  status: 'queued' | 'error' | string;
+  run_id: number;
+  message?: string;
+}
+
+export interface RunStatus {
+  run_id: number;
+  started_at: string;
+  finished_at?: string | null;
+  jobs_collected: number;
+  jobs_new: number;
+  jobs_updated: number;
+  jobs_filtered: number;
+  errors: number;
+  sources?: string | null;
+  criteria?: Record<string, unknown> | null;
+}
+
 export interface SearchParams {
   q?: string;
   location?: string;
@@ -120,6 +139,37 @@ export async function getStats(): Promise<Stats> {
     throw new Error('Failed to fetch stats');
   }
   
+  return res.json();
+}
+
+/**
+ * Trigger an on-demand scrape (public endpoint).
+ */
+export async function triggerScrape(input: { query: string; location?: string; use_ai?: boolean }): Promise<ScrapeResponse> {
+  const res = await fetch(`${API_URL}/scrape`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      query: input.query,
+      location: input.location,
+      use_ai: !!input.use_ai,
+    }),
+  });
+
+  if (!res.ok) {
+    const text = await res.text().catch(() => '');
+    throw new Error(text || 'Failed to trigger scrape');
+  }
+
+  return res.json();
+}
+
+/**
+ * Get run status by id.
+ */
+export async function getRun(runId: number): Promise<RunStatus> {
+  const res = await fetch(`${API_URL}/runs/${runId}`, { cache: 'no-store' });
+  if (!res.ok) throw new Error('Failed to fetch run status');
   return res.json();
 }
 
