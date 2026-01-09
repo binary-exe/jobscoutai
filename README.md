@@ -2,7 +2,7 @@
 
 **AI-powered job aggregator for remote work.** Find automation, engineering, and tech jobs from dozens of sources, ranked by relevance using GPT-4.
 
-[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/yourusername/jobscout)
+[![Deploy with Vercel](https://vercel.com/button)](https://vercel.com/new/clone?repository-url=https://github.com/binary-exe/jobscoutai)
 
 ---
 
@@ -52,8 +52,8 @@
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/jobscout.git
-cd jobscout
+git clone https://github.com/binary-exe/jobscoutai.git
+cd jobscoutai
 
 # Backend
 cd backend
@@ -98,10 +98,10 @@ See [DEPLOY.md](./DEPLOY.md) for full deployment instructions.
 
 **Quick deploy:**
 
-1. **Database**: Create free Supabase project, run schema SQL
-2. **Backend**: Deploy to Fly.io with `fly deploy`
+1. **Database**: Create free Supabase project, run schema SQL (use Session pooler connection string)
+2. **Backend**: Deploy to Fly.io with `fly deploy -a jobscout-api`
 3. **Frontend**: Deploy to Vercel with `npx vercel --prod`
-4. **Scrapes**: Set up GitHub Actions cron or use built-in scheduler
+4. **Scrapes**: Built-in APScheduler runs automatically on Fly.io (every 6 hours by default)
 
 **Estimated cost: $0-5/month**
 
@@ -123,16 +123,21 @@ jobscout/
 │       ├── storage/       # Postgres adapter
 │       └── worker.py      # Scrape runner
 │
-├── providers/             # Job source providers
-├── fetchers/              # HTTP/browser fetching
-├── extract/               # HTML/JSON extraction
-├── llm/                   # AI agents
-├── storage/               # SQLite adapter
+├── jobscout/              # Core scraping library
+│   ├── providers/         # Job source providers
+│   ├── fetchers/          # HTTP/browser fetching
+│   ├── extract/           # HTML/JSON extraction
+│   ├── llm/               # AI agents
+│   ├── storage/           # SQLite adapter
+│   ├── cli.py             # Command-line interface
+│   ├── orchestrator.py    # Main scrape pipeline
+│   ├── models.py          # Data models
+│   └── dedupe.py          # Deduplication engine
 │
-├── cli.py                 # Command-line interface
-├── orchestrator.py        # Main scrape pipeline
-├── models.py              # Data models
-└── dedupe.py              # Deduplication engine
+├── pyproject.toml         # Python package config
+├── README.md
+├── DEPLOY.md
+└── AGENTS.md              # Development guide for AI agents
 ```
 
 ---
@@ -186,16 +191,21 @@ When enabled (`--ai` flag or `JOBSCOUT_AI_ENABLED=true`), the AI pipeline:
 
 ```bash
 # Search jobs
-curl "https://api.example.com/api/v1/jobs?q=python&remote=remote&page=1"
+curl "https://jobscout-api.fly.dev/api/v1/jobs?q=python&remote=remote&page=1"
 
 # Get stats
-curl "https://api.example.com/api/v1/admin/stats"
+curl "https://jobscout-api.fly.dev/api/v1/admin/stats"
 
-# Trigger scrape (requires admin token)
-curl -X POST "https://api.example.com/api/v1/admin/run" \
+# Trigger on-demand scrape (public endpoint, rate-limited)
+curl -X POST "https://jobscout-api.fly.dev/api/v1/scrape" \
+  -H "Content-Type: application/json" \
+  -d '{"query": "automation engineer", "location": "Remote", "use_ai": false}'
+
+# Trigger admin scrape (requires admin token)
+curl -X POST "https://jobscout-api.fly.dev/api/v1/admin/run" \
   -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  -d '{"query": "automation engineer", "use_ai": true}'
+  -d '{"query": "automation engineer", "location": "Remote", "use_ai": true}'
 ```
 
 ---
@@ -264,7 +274,7 @@ For major changes, open an issue first to discuss.
 
 ## 🐛 Issues
 
-Found a bug? [Open an issue](https://github.com/yourusername/jobscout/issues).
+Found a bug? [Open an issue](https://github.com/binary-exe/jobscoutai/issues).
 
 ---
 

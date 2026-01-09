@@ -33,22 +33,28 @@ CREATE TABLE IF NOT EXISTS jobs (
     provider_id TEXT,
     source TEXT NOT NULL,
     source_url TEXT,
+    
     title TEXT NOT NULL,
     title_normalized TEXT,
     company TEXT NOT NULL,
     company_normalized TEXT,
+    
     location_raw TEXT,
     country TEXT,
     city TEXT,
     remote_type TEXT DEFAULT 'unknown',
+    
     employment_types TEXT[] DEFAULT '{}',
     salary_min REAL,
     salary_max REAL,
     salary_currency TEXT,
+    
     job_url TEXT,
     job_url_canonical TEXT,
     apply_url TEXT,
+    
     description_text TEXT,
+    
     emails TEXT[] DEFAULT '{}',
     company_website TEXT,
     linkedin_url TEXT,
@@ -57,12 +63,16 @@ CREATE TABLE IF NOT EXISTS jobs (
     instagram_url TEXT,
     youtube_url TEXT,
     other_urls TEXT[] DEFAULT '{}',
+    
     tags TEXT[] DEFAULT '{}',
     founder TEXT,
+    
     posted_at TIMESTAMPTZ,
     expires_at TIMESTAMPTZ,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    
+    -- AI fields
     ai_score REAL,
     ai_reasons TEXT,
     ai_remote_type TEXT,
@@ -77,12 +87,14 @@ CREATE TABLE IF NOT EXISTS jobs (
     ai_flags TEXT[] DEFAULT '{}'
 );
 
--- Indexes
+-- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
+CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_normalized);
 CREATE INDEX IF NOT EXISTS idx_jobs_remote_type ON jobs(remote_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_posted_at ON jobs(posted_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_jobs_first_seen ON jobs(first_seen_at DESC);
 CREATE INDEX IF NOT EXISTS idx_jobs_ai_score ON jobs(ai_score DESC NULLS LAST);
+CREATE INDEX IF NOT EXISTS idx_jobs_search ON jobs USING gin(to_tsvector('english', title || ' ' || company || ' ' || COALESCE(description_text, '')));
 
 -- Runs table
 CREATE TABLE IF NOT EXISTS runs (
@@ -95,14 +107,23 @@ CREATE TABLE IF NOT EXISTS runs (
     jobs_filtered INTEGER DEFAULT 0,
     errors INTEGER DEFAULT 0,
     sources TEXT,
-    criteria JSONB
+    criteria JSONB,
+    error_summary TEXT
 );
+
+CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);
 ```
 
 ### 1.3 Get Connection String
 1. Go to **Settings > Database**
-2. Copy the **Connection string (URI)** - looks like:
-   `postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres`
+2. **Important**: Use the **Session pooler** connection string (not Direct connection)
+   - Click on "Connection string" tab
+   - Select "Session mode" (not Transaction mode)
+   - Copy the connection string - looks like:
+     `postgresql://postgres.[PROJECT]:[PASSWORD]@aws-0-[REGION].pooler.supabase.com:6543/postgres?sslmode=require`
+   - Or the URI format: `postgresql://postgres:[PASSWORD]@db.[PROJECT].supabase.co:5432/postgres?sslmode=require`
+   
+**Note**: The Session pooler is recommended for better compatibility with Fly.io and connection pooling.
 
 ---
 
@@ -142,18 +163,24 @@ app = "jobscout-api"
 primary_region = "iad"
 
 [build]
-  dockerfile = "Dockerfile"
+  dockerfile = "backend/Dockerfile"
 
 [http_service]
   internal_port = 8000
   force_https = true
-  auto_stop_machines = true
+  auto_stop_machines = "stop"
   auto_start_machines = true
   min_machines_running = 0
 
 [env]
   JOBSCOUT_USE_SQLITE = "false"
   JOBSCOUT_DEBUG = "false"
+  JOBSCOUT_SCRAPE_INTERVAL_HOURS = "6"
+
+[[vm]]
+  cpu_kind = "shared"
+  cpus = 1
+  memory_mb = 512
 ```
 
 ### 2.5 Deploy

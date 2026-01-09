@@ -322,64 +322,70 @@ Request body:
 ```sql
 CREATE TABLE jobs (
     job_id TEXT PRIMARY KEY,              -- MD5 hash of provider_id + source
-    provider_id TEXT NOT NULL,
-    scraped_at TIMESTAMPTZ NOT NULL,
-    posted_at TIMESTAMPTZ,
-    expires_at TIMESTAMPTZ,
-    first_seen_at TIMESTAMPTZ NOT NULL,
-    last_seen_at TIMESTAMPTZ NOT NULL,
+    provider_id TEXT,
+    source TEXT NOT NULL,
+    source_url TEXT,
     
-    -- Core fields
     title TEXT NOT NULL,
+    title_normalized TEXT,
     company TEXT NOT NULL,
+    company_normalized TEXT,
+    
     location_raw TEXT,
     country TEXT,
     city TEXT,
-    remote_type TEXT,                     -- 'remote', 'hybrid', 'onsite', 'unknown'
-    employment_types TEXT[],              -- ['full_time', 'contract', ...]
+    remote_type TEXT DEFAULT 'unknown',   -- 'remote', 'hybrid', 'onsite', 'unknown'
+    employment_types TEXT[] DEFAULT '{}', -- ['full_time', 'contract', ...]
     
-    -- URLs
-    job_url TEXT NOT NULL,
+    salary_min REAL,
+    salary_max REAL,
+    salary_currency TEXT,
+    
+    job_url TEXT,
+    job_url_canonical TEXT,
     apply_url TEXT,
+    
+    description_text TEXT,
+    
+    emails TEXT[] DEFAULT '{}',
     company_website TEXT,
     linkedin_url TEXT,
+    twitter_url TEXT,
+    facebook_url TEXT,
+    instagram_url TEXT,
+    youtube_url TEXT,
+    other_urls TEXT[] DEFAULT '{}',
     
-    -- Content
-    description_text TEXT,
-    description_html TEXT,
-    emails TEXT[],
+    tags TEXT[] DEFAULT '{}',
+    founder TEXT,
     
-    -- Metadata
-    source TEXT NOT NULL,                 -- 'remoteok', 'weworkremotely', etc.
-    source_url TEXT,
-    tags TEXT[],
-    salary_min NUMERIC,
-    salary_max NUMERIC,
-    salary_currency TEXT,
+    posted_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     
     -- AI fields (nullable)
     ai_score REAL,                        -- 0-100 relevance score
     ai_reasons TEXT,
     ai_remote_type TEXT,
-    ai_employment_types TEXT[],
+    ai_employment_types TEXT[] DEFAULT '{}',
     ai_seniority TEXT,
     ai_confidence REAL,
     ai_summary TEXT,
     ai_requirements TEXT,
-    ai_tech_stack TEXT[],                 -- Stored as JSON array
+    ai_tech_stack TEXT,
     ai_company_domain TEXT,
     ai_company_summary TEXT,
-    ai_flags TEXT[],                      -- ['low_salary', 'vague_description', ...]
-    
-    -- Raw data
-    raw_data JSONB
+    ai_flags TEXT[] DEFAULT '{}'
 );
 
 CREATE INDEX idx_jobs_source ON jobs(source);
-CREATE INDEX idx_jobs_posted_at ON jobs(posted_at DESC);
-CREATE INDEX idx_jobs_first_seen_at ON jobs(first_seen_at DESC);
-CREATE INDEX idx_jobs_ai_score ON jobs(ai_score DESC NULLS LAST);
+CREATE INDEX idx_jobs_company ON jobs(company_normalized);
 CREATE INDEX idx_jobs_remote_type ON jobs(remote_type);
+CREATE INDEX idx_jobs_posted_at ON jobs(posted_at DESC NULLS LAST);
+CREATE INDEX idx_jobs_first_seen ON jobs(first_seen_at DESC);
+CREATE INDEX idx_jobs_ai_score ON jobs(ai_score DESC NULLS LAST);
+CREATE INDEX idx_jobs_search ON jobs USING gin(to_tsvector('english', title || ' ' || company || ' ' || COALESCE(description_text, '')));
 ```
 
 ### `runs` table
@@ -387,9 +393,9 @@ CREATE INDEX idx_jobs_remote_type ON jobs(remote_type);
 ```sql
 CREATE TABLE runs (
     run_id SERIAL PRIMARY KEY,
-    started_at TIMESTAMPTZ NOT NULL,
+    started_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     finished_at TIMESTAMPTZ,
-    criteria JSONB NOT NULL,              -- Search criteria used
+    criteria JSONB,                       -- Search criteria used
     jobs_collected INTEGER DEFAULT 0,
     jobs_new INTEGER DEFAULT 0,
     jobs_updated INTEGER DEFAULT 0,
