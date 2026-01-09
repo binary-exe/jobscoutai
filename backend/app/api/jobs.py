@@ -357,9 +357,11 @@ def _row_to_job_response(row: dict) -> JobResponse:
 def _row_to_job_detail(row: dict) -> JobDetailResponse:
     """Convert SQLite row to JobDetailResponse."""
     base = _row_to_job_response(row)
+    base_data = base.model_dump()
+    # Override description_text to ensure full text, add detail-only fields
+    base_data["description_text"] = row.get("description_text") or ""
     return JobDetailResponse(
-        **base.model_dump(),
-        description_text=row.get("description_text", ""),
+        **base_data,
         emails=_parse_json_field(row.get("emails")),
         ai_company_summary=row.get("ai_company_summary"),
     )
@@ -401,9 +403,11 @@ def _record_to_job_response(row) -> JobResponse:
 def _record_to_job_detail(row) -> JobDetailResponse:
     """Convert asyncpg Record to JobDetailResponse."""
     base = _record_to_job_response(row)
+    base_data = base.model_dump()
+    # Override description_text to ensure full text, add detail-only fields
+    base_data["description_text"] = row.get("description_text") or ""
     return JobDetailResponse(
-        **base.model_dump(),
-        description_text=row.get("description_text", ""),
+        **base_data,
         emails=row.get("emails") or [],
         ai_company_summary=row.get("ai_company_summary"),
     )
