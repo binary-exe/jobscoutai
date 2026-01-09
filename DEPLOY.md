@@ -1,15 +1,15 @@
 # JobScout Deployment Guide
 
-Deploy JobScout for **free or near-free** using Vercel (frontend), Supabase (database), and Fly.io or Render (backend).
+Deploy JobScout for **free or near-free** using Vercel (frontend), Supabase (database), and Fly.io (backend).
 
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
-│   Vercel        │────▶│   Fly.io/       │────▶│   Supabase      │
-│   (Frontend)    │     │   Render        │     │   (Postgres)    │
-│   FREE          │     │   (Backend)     │     │   FREE          │
-│                 │     │   ~$0-5/mo      │     │                 │
+│   Vercel        │────▶│   Fly.io        │────▶│   Supabase      │
+│   (Frontend)    │     │   (Backend)     │     │   (Postgres)    │
+│   FREE          │     │   ~$0-5/mo      │     │   FREE          │
+│                 │     │                 │     │                 │
 └─────────────────┘     └─────────────────┘     └─────────────────┘
 ```
 
@@ -163,27 +163,7 @@ fly deploy
 
 Your API will be at: `https://jobscout-api.fly.dev`
 
----
-
-## Step 2 (Alternative): Backend (Render)
-
-### 2.1 Create Web Service
-1. Go to [render.com](https://render.com) and sign up
-2. **New > Web Service**
-3. Connect your GitHub repo
-4. Settings:
-   - **Root Directory**: `backend`
-   - **Build Command**: `pip install -r requirements.txt`
-   - **Start Command**: `uvicorn backend.app.main:app --host 0.0.0.0 --port $PORT`
-   - **Instance Type**: Free (spins down after 15 min inactivity)
-
-### 2.2 Add Environment Variables
-In Render dashboard, add:
-- `JOBSCOUT_DATABASE_URL`
-- `JOBSCOUT_ADMIN_TOKEN`
-- `JOBSCOUT_CORS_ORIGINS`
-- `JOBSCOUT_OPENAI_API_KEY` (optional)
-- `JOBSCOUT_AI_ENABLED`
+**Note:** Fly.io is the recommended backend platform. It provides better performance, automatic scaling, and built-in scheduled tasks. The backend uses APScheduler for scheduled scrapes, which works seamlessly with Fly.io's always-on machines.
 
 ---
 
@@ -233,53 +213,29 @@ curl -X POST https://jobscout-api.fly.dev/api/v1/admin/run \
 | **Vercel** | 100GB bandwidth, unlimited deploys | Perfect for frontend |
 | **Supabase** | 500MB database, 2GB bandwidth | Plenty for ~50k jobs |
 | **Fly.io** | 3 shared VMs, 160GB bandwidth | May need $5/mo for always-on |
-| **Render** | 750 hours/month, spins down | Free but cold starts |
 | **OpenAI** | Pay-as-you-go | ~$0.15/1M input tokens with gpt-4o-mini |
 
 **Estimated total: $0-5/month** depending on usage.
 
 ---
 
-## Cron / Scheduled Scrapes
+## Scheduled Scrapes
 
-The backend has a built-in scheduler, but if using Render (which spins down), use an external cron:
+The backend uses **APScheduler** for automatic scheduled scrapes. This is configured in `backend/app/main.py` and runs every 6 hours by default (configurable via `JOBSCOUT_SCRAPE_INTERVAL_HOURS`).
 
-### Option A: GitHub Actions (Free)
-Create `.github/workflows/scrape.yml`:
+Since Fly.io keeps machines running, scheduled scrapes work automatically without any external cron setup.
 
-```yaml
-name: Scheduled Scrape
-on:
-  schedule:
-    - cron: '0 */6 * * *'  # Every 6 hours
-  workflow_dispatch:
-
-jobs:
-  scrape:
-    runs-on: ubuntu-latest
-    steps:
-      - name: Trigger scrape
-        run: |
-          curl -X POST ${{ secrets.API_URL }}/admin/run \
-            -H "Authorization: Bearer ${{ secrets.ADMIN_TOKEN }}" \
-            -H "Content-Type: application/json" \
-            -d '{"query": "automation engineer", "use_ai": true}'
-```
-
-Add secrets in GitHub repo settings.
-
-### Option B: cron-job.org (Free)
-1. Go to [cron-job.org](https://cron-job.org)
-2. Create job hitting your `/admin/run` endpoint
-3. Set schedule (e.g., every 6 hours)
+**To change the schedule:**
+1. Set `JOBSCOUT_SCRAPE_INTERVAL_HOURS` in Fly.io secrets
+2. Redeploy: `fly deploy -a jobscout-api`
 
 ---
 
 ## Monitoring
 
-- **Fly.io**: `fly logs`
-- **Render**: Dashboard > Logs
+- **Fly.io**: `fly logs -a jobscout-api` or dashboard at fly.io
 - **Vercel**: Dashboard > Deployments > Functions
+- **Supabase**: Dashboard > Logs
 
 ---
 
@@ -304,7 +260,7 @@ Add secrets in GitHub repo settings.
 ## Product Hunt Launch Checklist
 
 - [ ] Deploy frontend to Vercel
-- [ ] Deploy backend to Fly.io/Render
+- [ ] Deploy backend to Fly.io
 - [ ] Run initial scrape
 - [ ] Test all pages load correctly
 - [ ] Test job detail pages
