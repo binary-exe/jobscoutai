@@ -54,9 +54,9 @@ dev = [
 jobscout = "jobscout.cli:main"
 
 [project.urls]
-Homepage = "https://github.com/yourusername/jobscout"
-Documentation = "https://github.com/yourusername/jobscout#readme"
-Repository = "https://github.com/yourusername/jobscout"
+Homepage = "https://github.com/binary-exe/jobscoutai"
+Documentation = "https://github.com/binary-exe/jobscoutai#readme"
+Repository = "https://github.com/binary-exe/jobscoutai"
 
 [tool.setuptools.packages.find]
 where = ["."]

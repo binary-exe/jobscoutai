@@ -2,19 +2,261 @@
 
 This document provides comprehensive context for AI agents (like Codex CLI) to continue development on JobScout.
 
+**⚠️ CRITICAL: Read this entire document before making any changes. This file is re-read every session.**
+
 ## 📋 Table of Contents
 
-1. [Project Overview](#project-overview)
-2. [Architecture](#architecture)
-3. [Directory Structure](#directory-structure)
-4. [Key Components](#key-components)
-5. [API Endpoints](#api-endpoints)
-6. [Database Schema](#database-schema)
-7. [Environment Variables](#environment-variables)
-8. [Development Workflow](#development-workflow)
-9. [Common Tasks](#common-tasks)
-10. [Deployment](#deployment)
-11. [Known Issues & TODOs](#known-issues--todos)
+1. [Quick Start & Commands](#quick-start--commands) ⚡ **START HERE**
+2. [Repository Map](#repository-map)
+3. [Definition of Done](#definition-of-done)
+4. [Development Constraints](#development-constraints)
+5. [Project Overview](#project-overview)
+6. [Architecture](#architecture)
+7. [Directory Structure](#directory-structure)
+8. [Key Components](#key-components)
+9. [API Endpoints](#api-endpoints)
+10. [Database Schema](#database-schema)
+11. [Environment Variables](#environment-variables)
+12. [Development Workflow](#development-workflow)
+13. [Common Tasks](#common-tasks)
+14. [Deployment](#deployment)
+15. [Known Issues & TODOs](#known-issues--todos)
+
+---
+
+## Quick Start & Commands
+
+### Repository Map
+
+```
+jobscout/                          # Root monorepo
+├── frontend/                      # Next.js 14 app (Vercel)
+│   ├── app/                      # Pages (App Router)
+│   ├── components/               # React components
+│   ├── lib/                      # API client, utils
+│   └── package.json              # npm scripts
+│
+├── backend/                       # FastAPI app (Fly.io)
+│   ├── app/                      # FastAPI application
+│   │   ├── api/                  # REST endpoints
+│   │   ├── core/                 # Config, database
+│   │   ├── storage/              # Postgres adapter
+│   │   └── worker.py             # Background tasks
+│   ├── Dockerfile                # Fly.io deployment
+│   └── requirements.txt          # Python deps
+│
+└── jobscout/                     # Core scraping library (Python package)
+    ├── providers/                # Job source providers
+    ├── fetchers/                 # HTTP/browser fetching
+    ├── extract/                  # HTML/JSON extraction
+    ├── llm/                      # AI features
+    └── storage/                  # SQLite adapter
+```
+
+### Exact Commands
+
+#### Development
+
+**Backend (FastAPI):**
+```bash
+cd backend
+pip install -r requirements.txt
+pip install -e ../  # Install jobscout package in dev mode
+cp env.sample .env
+# Edit .env with your settings
+uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
+```
+- Runs at: `http://localhost:8000`
+- API docs: `http://localhost:8000/docs`
+
+**Frontend (Next.js):**
+```bash
+cd frontend
+npm install
+cp env.sample .env.local
+# Edit .env.local: NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+npm run dev
+```
+- Runs at: `http://localhost:3000`
+
+**Core Library (CLI):**
+```bash
+# Install in dev mode
+pip install -e ".[all]"
+
+# Run scrape
+python -m jobscout "automation engineer" --remote-only --verbose
+```
+
+#### Testing
+
+**Backend:**
+```bash
+cd backend
+# No formal test suite yet - test via Swagger UI at /docs
+# Or manual API calls:
+curl http://localhost:8000/api/v1/jobs?q=test
+```
+
+**Frontend:**
+```bash
+cd frontend
+npm run lint        # TypeScript/ESLint checks
+npm run build       # Production build test
+```
+
+**Core Library:**
+```bash
+# Manual testing via CLI
+python -m jobscout "test query" --verbose
+```
+
+#### Build
+
+**Backend:**
+```bash
+cd backend
+# Build happens in Dockerfile for Fly.io
+# Local build test:
+docker build -f Dockerfile -t jobscout-api .
+```
+
+**Frontend:**
+```bash
+cd frontend
+npm run build       # Production build
+npm run start       # Test production build locally
+```
+
+#### Deploy
+
+**Backend (Fly.io):**
+```bash
+# From repo root
+fly deploy -a jobscout-api
+
+# Check logs
+fly logs -a jobscout-api
+
+# Set secrets (if needed)
+fly secrets set JOBSCOUT_DATABASE_URL="..." -a jobscout-api
+```
+
+**Frontend (Vercel):**
+```bash
+# Auto-deploys on push to main branch
+# Manual deploy:
+cd frontend
+npx vercel --prod
+
+# Or via GitHub integration (automatic)
+```
+
+**Database (Supabase):**
+- Schema changes: Run SQL in Supabase SQL Editor
+- Connection: Use Session pooler connection string (not Direct)
+
+---
+
+## Definition of Done
+
+Before considering any task complete, verify:
+
+### ✅ Code Quality
+- [ ] **Linting**: No lint errors
+  - Backend: Python code follows PEP 8 (no formal linter yet, but check manually)
+  - Frontend: `npm run lint` passes
+- [ ] **Type Safety**: TypeScript types are correct (frontend)
+- [ ] **No Console Errors**: Check browser console and server logs
+
+### ✅ Functionality
+- [ ] **Local Testing**: Feature works in local dev environment
+  - Backend: Test via Swagger UI (`/docs`) or curl
+  - Frontend: Test in browser at `http://localhost:3000`
+- [ ] **API Compatibility**: Changes don't break existing API contracts
+- [ ] **Database**: Schema changes (if any) are backward compatible
+
+### ✅ Deployment Check
+- [ ] **Build Success**: 
+  - Frontend: `npm run build` succeeds
+  - Backend: Docker build succeeds (or would succeed)
+- [ ] **Environment Variables**: All required env vars documented in `env.sample`
+- [ ] **Documentation**: Updated `AGENTS.md` if architecture/commands changed
+
+### ✅ Git Hygiene
+- [ ] **Commits**: Clear, descriptive commit messages
+- [ ] **No Secrets**: No API keys, tokens, or passwords in code
+- [ ] **No Large Files**: No binary files or large data files committed
+
+**Note**: Formal unit tests are not yet implemented. Manual testing via Swagger UI and browser is acceptable for now.
+
+---
+
+## Development Constraints
+
+### 🚫 DO NOT
+
+1. **Infrastructure Changes**
+   - ❌ Do NOT change deployment platforms (Fly.io, Vercel, Supabase)
+   - ❌ Do NOT modify `fly.toml` structure without explicit request
+   - ❌ Do NOT change Dockerfile base image or major dependencies
+   - ❌ Do NOT add new infrastructure services (Redis, queues, etc.) without approval
+
+2. **Dependency Management**
+   - ❌ Do NOT add new Python packages to `backend/requirements.txt` without checking if they're in `pyproject.toml`
+   - ❌ Do NOT add new npm packages to `frontend/package.json` without justification
+   - ❌ Do NOT upgrade major versions (e.g., Next.js 14 → 15, Python 3.11 → 3.12) without approval
+   - ✅ Prefer using existing dependencies from `pyproject.toml` optional groups
+
+3. **Database Schema**
+   - ❌ Do NOT drop or rename existing columns (breaking changes)
+   - ❌ Do NOT change column types without migration plan
+   - ✅ Add new columns as nullable when possible
+   - ✅ Always update both `backend/app/storage/postgres.py` schema AND `AGENTS.md` documentation
+
+4. **API Contracts**
+   - ❌ Do NOT remove or rename existing API endpoints
+   - ❌ Do NOT change request/response schemas without versioning
+   - ✅ Add new endpoints as `/api/v1/new-endpoint`
+   - ✅ Maintain backward compatibility
+
+5. **Environment Variables**
+   - ❌ Do NOT remove existing env vars
+   - ❌ Do NOT change env var names without migration path
+   - ✅ Always update `env.sample` files when adding new vars
+   - ✅ Document new vars in `AGENTS.md`
+
+6. **File Structure**
+   - ❌ Do NOT move files between `frontend/` and `backend/` without explicit request
+   - ❌ Do NOT restructure the `jobscout/` package without approval
+   - ✅ Follow existing patterns and conventions
+
+### ✅ DO
+
+1. **Follow Existing Patterns**
+   - Use existing component patterns in `frontend/components/`
+   - Follow API endpoint structure in `backend/app/api/`
+   - Match provider implementation style in `jobscout/providers/`
+
+2. **Error Handling**
+   - Always handle errors gracefully
+   - Log errors with context
+   - Return appropriate HTTP status codes
+
+3. **Documentation**
+   - Update `AGENTS.md` if you add new commands, endpoints, or patterns
+   - Add comments for complex logic
+   - Update `env.sample` files for new configuration
+
+4. **Testing**
+   - Test locally before committing
+   - Verify API endpoints via Swagger UI
+   - Check frontend in browser
+
+5. **Cost Awareness**
+   - Be mindful of API costs (OpenAI, external APIs)
+   - Use caching where appropriate
+   - Respect rate limits
 
 ---
 
@@ -464,39 +706,30 @@ NEXT_PUBLIC_API_URL=https://jobscout-api.fly.dev/api/v1
 
 ## Development Workflow
 
+> **Note**: See [Quick Start & Commands](#quick-start--commands) for exact commands.
+
 ### Local Setup
 
-1. **Backend:**
-   ```bash
-   cd backend
-   pip install -r requirements.txt
-   cp env.sample .env
-   # Edit .env with your settings
-   uvicorn backend.app.main:app --reload
-   ```
+See [Quick Start & Commands](#quick-start--commands) section above for step-by-step setup instructions.
 
-2. **Frontend:**
-   ```bash
-   cd frontend
-   npm install
-   cp env.sample .env.local
-   # Edit .env.local with NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
-   npm run dev
-   ```
-
-3. **Database:**
-   - For local dev, set `JOBSCOUT_USE_SQLITE=true` in backend `.env`
-   - SQLite DB will be created at `JOBSCOUT_SQLITE_PATH` (default: `jobs.db`)
+**Key points:**
+- Backend runs on `http://localhost:8000`
+- Frontend runs on `http://localhost:3000`
+- For local dev, use SQLite: set `JOBSCOUT_USE_SQLITE=true` in backend `.env`
+- SQLite DB created at `JOBSCOUT_SQLITE_PATH` (default: `jobs.db`)
 
 ### Testing Changes
 
 1. **Backend API:**
    - Visit `http://localhost:8000/docs` for Swagger UI
    - Test endpoints interactively
+   - Check logs for errors
 
 2. **Frontend:**
    - Visit `http://localhost:3000`
-   - Trigger scrape, check job details page
+   - Test in browser with DevTools open
+   - Run `npm run lint` before committing
+   - Run `npm run build` to verify production build
 
 3. **CLI (core library):**
    ```bash
@@ -505,9 +738,10 @@ NEXT_PUBLIC_API_URL=https://jobscout-api.fly.dev/api/v1
 
 ### Code Style
 
-- **Python**: Follow PEP 8, use type hints
+- **Python**: Follow PEP 8, use type hints, max line length 100
 - **TypeScript**: Use strict mode, prefer functional components
 - **Formatting**: No enforced formatter (yet), but be consistent
+- **Imports**: Group imports (stdlib, third-party, local)
 
 ---
 
@@ -568,37 +802,51 @@ NEXT_PUBLIC_API_URL=https://jobscout-api.fly.dev/api/v1
 
 ## Deployment
 
+> **Note**: See [Quick Start & Commands](#quick-start--commands) for exact deploy commands.
+
 ### Backend (Fly.io)
 
-1. **Set secrets:**
-   ```bash
-   fly secrets set JOBSCOUT_DATABASE_URL="..." -a jobscout-api
-   fly secrets set JOBSCOUT_CORS_ORIGINS='["https://jobscoutai.vercel.app"]' -a jobscout-api
-   fly secrets set JOBSCOUT_ADMIN_TOKEN="..." -a jobscout-api
-   ```
+**Deploy:**
+```bash
+fly deploy -a jobscout-api
+```
 
-2. **Deploy:**
-   ```bash
-   fly deploy -a jobscout-api
-   ```
+**Set secrets (if needed):**
+```bash
+fly secrets set JOBSCOUT_DATABASE_URL="..." -a jobscout-api
+fly secrets set JOBSCOUT_CORS_ORIGINS='["https://jobscoutai.vercel.app"]' -a jobscout-api
+fly secrets set JOBSCOUT_ADMIN_TOKEN="..." -a jobscout-api
+```
 
-3. **Check logs:**
-   ```bash
-   fly logs -a jobscout-api
-   ```
+**Check logs:**
+```bash
+fly logs -a jobscout-api
+```
+
+**Important**: 
+- Uses `backend/Dockerfile` for build
+- Auto-scales based on traffic
+- Scheduled scrapes run via APScheduler
 
 ### Frontend (Vercel)
 
-1. Connect GitHub repo to Vercel
-2. Set environment variable: `NEXT_PUBLIC_API_URL=https://jobscout-api.fly.dev/api/v1`
-3. Deploy automatically on push to `main`
+**Auto-deploy**: Pushes to `main` branch automatically trigger deployment
+
+**Manual deploy:**
+```bash
+cd frontend
+npx vercel --prod
+```
+
+**Environment variables**: Set in Vercel dashboard
+- `NEXT_PUBLIC_API_URL=https://jobscout-api.fly.dev/api/v1`
 
 ### Database (Supabase)
 
 1. Create project at supabase.com
-2. Run SQL schema (see `DEPLOY.md`)
+2. Run SQL schema (see `DEPLOY.md` or `backend/app/storage/postgres.py`)
 3. Get connection string from Settings → Database
-4. Use **Session pooler** connection string (not Direct)
+4. **Use Session pooler connection string** (not Direct) for Fly.io compatibility
 
 ---
 
