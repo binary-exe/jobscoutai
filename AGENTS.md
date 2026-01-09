@@ -1,0 +1,674 @@
+# JobScout Development Guide for AI Agents
+
+This document provides comprehensive context for AI agents (like Codex CLI) to continue development on JobScout.
+
+## 📋 Table of Contents
+
+1. [Project Overview](#project-overview)
+2. [Architecture](#architecture)
+3. [Directory Structure](#directory-structure)
+4. [Key Components](#key-components)
+5. [API Endpoints](#api-endpoints)
+6. [Database Schema](#database-schema)
+7. [Environment Variables](#environment-variables)
+8. [Development Workflow](#development-workflow)
+9. [Common Tasks](#common-tasks)
+10. [Deployment](#deployment)
+11. [Known Issues & TODOs](#known-issues--todos)
+
+---
+
+## Project Overview
+
+**JobScout** is an AI-powered job aggregator that:
+- Scrapes jobs from multiple sources (RemoteOK, WeWorkRemotely, Remotive, Arbeitnow, etc.)
+- Provides on-demand scraping via web UI
+- Uses AI (OpenAI GPT-4o-mini) for ranking, classification, and enrichment (optional)
+- Stores jobs in PostgreSQL (Supabase) or SQLite (local dev)
+- Serves a beautiful Next.js frontend with real-time search
+
+**Tech Stack:**
+- **Backend**: FastAPI (Python 3.11), asyncpg, APScheduler
+- **Frontend**: Next.js 14, React 18, TypeScript, Tailwind CSS
+- **Database**: PostgreSQL (Supabase) / SQLite (dev)
+- **Deployment**: Fly.io (backend), Vercel (frontend)
+- **AI**: OpenAI API (gpt-4o-mini, optional)
+
+---
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────────┐
+│                    Frontend (Next.js)                         │
+│              Vercel: jobscoutai.vercel.app                    │
+│  - Server-side rendering                                      │
+│  - On-demand scraping via POST /api/v1/scrape                │
+│  - Real-time job search with filters                          │
+└──────────────────────────┬───────────────────────────────────┘
+                           │ HTTPS
+┌──────────────────────────▼───────────────────────────────────┐
+│                  Backend (FastAPI)                            │
+│            Fly.io: jobscout-api.fly.dev                       │
+│  - REST API (/api/v1/jobs, /api/v1/scrape, /api/v1/runs)     │
+│  - Background scraping (async, writes to Postgres)            │
+│  - Scheduled scrapes (APScheduler, every 6h)                  │
+│  - Rate limiting & concurrency caps                           │
+└──────────────────────────┬───────────────────────────────────┘
+                           │
+          ┌────────────────┼────────────────┐
+          │                │                │
+          ▼                ▼                ▼
+┌─────────────────┐ ┌─────────────┐ ┌─────────────────┐
+│   Supabase      │ │   OpenAI    │ │  Job Sources    │
+│   PostgreSQL    │ │  (Optional) │ │  (APIs/RSS)     │
+│   - jobs table  │ │ gpt-4o-mini │ │  - RemoteOK     │
+│   - runs table  │ │             │ │  - WeWorkRemotely│
+│   - llm_cache   │ │             │ │  - Remotive     │
+└─────────────────┘ └─────────────┘ └─────────────────┘
+```
+
+**Data Flow:**
+1. User enters search query → Frontend triggers `POST /api/v1/scrape`
+2. Backend enqueues scrape run → Returns `run_id` immediately
+3. Background worker scrapes from multiple providers → Writes to Postgres
+4. Frontend polls `GET /api/v1/runs/{run_id}` → Shows progress
+5. When complete, frontend refreshes job list from `GET /api/v1/jobs`
+
+---
+
+## Directory Structure
+
+```
+jobscout/
+├── backend/                    # FastAPI backend
+│   ├── app/
+│   │   ├── api/                # API endpoints
+│   │   │   ├── jobs.py         # GET /jobs, GET /jobs/{id}
+│   │   │   ├── scrape.py       # POST /scrape (public, rate-limited)
+│   │   │   ├── runs.py          # GET /runs/{id}, GET /runs/latest
+│   │   │   └── admin.py        # POST /admin/run (admin-only)
+│   │   ├── core/
+│   │   │   ├── config.py       # Settings (Pydantic)
+│   │   │   └── database.py     # asyncpg connection pool
+│   │   ├── storage/
+│   │   │   └── postgres.py     # Postgres adapter (upsert_job, start_run, etc.)
+│   │   ├── worker.py           # Background scraping logic
+│   │   └── main.py             # FastAPI app entry point
+│   ├── Dockerfile              # Fly.io deployment
+│   ├── requirements.txt        # Python dependencies
+│   └── env.sample              # Environment variable template
+│
+├── frontend/                   # Next.js frontend
+│   ├── app/
+│   │   ├── page.tsx            # Home page (job list + search)
+│   │   ├── job/[id]/page.tsx   # Job detail page
+│   │   └── layout.tsx          # Root layout
+│   ├── components/
+│   │   ├── SearchBar.tsx       # Search input + scrape trigger
+│   │   ├── JobCard.tsx         # Job list item
+│   │   ├── Filters.tsx         # Sidebar filters
+│   │   ├── FormattedDescription.tsx  # Formats job descriptions
+│   │   └── ...
+│   ├── lib/
+│   │   ├── api.ts              # API client functions
+│   │   └── utils.ts            # Utility functions
+│   └── package.json
+│
+├── jobscout/                   # Core scraping library
+│   ├── orchestrator.py         # Main scrape orchestration
+│   ├── models.py              # Criteria, NormalizedJob, enums
+│   ├── dedupe.py              # Multi-layer deduplication
+│   ├── providers/             # Job source providers
+│   │   ├── remoteok.py
+│   │   ├── weworkremotely.py
+│   │   ├── remotive.py
+│   │   ├── arbeitnow.py
+│   │   ├── discovery.py        # Auto-discovers ATS job boards
+│   │   └── ...
+│   ├── fetchers/              # HTTP/Browser fetching
+│   │   ├── http.py            # aiohttp with retries/throttling
+│   │   └── browser.py         # Playwright (optional)
+│   ├── extract/               # Data extraction
+│   │   ├── html.py            # HTML stripping/parsing
+│   │   ├── jsonld.py          # Schema.org JobPosting parsing
+│   │   └── enrich.py          # Company page enrichment
+│   ├── llm/                   # AI features (optional)
+│   │   ├── provider.py        # Abstract LLM client
+│   │   ├── openai_client.py   # OpenAI implementation
+│   │   ├── rank.py            # Job ranking
+│   │   ├── classify.py        # Remote type, employment type
+│   │   ├── enrich_llm.py      # Summary, requirements, tech stack
+│   │   ├── company_agent.py   # Company research
+│   │   ├── alerts.py          # Quality/safety flags
+│   │   └── cache.py           # SQLite LLM response cache
+│   └── storage/
+│       └── sqlite.py          # SQLite adapter (local dev)
+│
+├── pyproject.toml             # Python package config
+├── README.md
+├── DEPLOY.md
+└── AGENTS.md                  # This file
+```
+
+---
+
+## Key Components
+
+### Backend
+
+#### `backend/app/worker.py`
+- `enqueue_scrape_run()`: Creates run record, triggers background scrape
+- `trigger_scrape_run()`: Synchronous scrape (used by admin endpoint)
+- `run_scheduled_scrape()`: Scheduled scrape runner
+
+#### `backend/app/api/scrape.py`
+- `POST /api/v1/scrape`: Public endpoint for on-demand scraping
+  - Rate limiting: 6 requests/hour per IP
+  - Concurrency cap: 1 active scrape
+  - Returns `{status: "queued", run_id: N}` immediately
+
+#### `backend/app/api/runs.py`
+- `GET /api/v1/runs/{run_id}`: Get run status and stats
+- `GET /api/v1/runs/latest`: Get most recent run
+
+#### `backend/app/storage/postgres.py`
+- `upsert_job_from_dict()`: Insert/update job (handles timestamps)
+- `start_run()`: Create run record
+- `finish_run()`: Update run with final stats
+
+### Frontend
+
+#### `frontend/components/SearchBar.tsx`
+- Search input with Enter key handler
+- Triggers `POST /api/v1/scrape` on submit
+- Polls run status, shows "Scraping..." indicator
+- Auto-refreshes results when scrape completes
+- AI toggle (sparkles icon, default off)
+
+#### `frontend/components/FormattedDescription.tsx`
+- Formats plain text job descriptions
+- Detects headings, bullet points, paragraphs
+- Renders with proper spacing and structure
+
+#### `frontend/lib/api.ts`
+- `getJobs()`: Fetch jobs with filters
+- `getJob(id)`: Fetch single job details
+- `scrapeNow()`: Trigger on-demand scrape
+- `getRunStatus(id)`: Poll run status
+
+### Core Library
+
+#### `jobscout/orchestrator.py`
+- `run_scrape()`: Main orchestration function
+  - Discovery (optional)
+  - Provider collection (parallel)
+  - Filtering
+  - Deduplication
+  - Enrichment
+  - AI pipeline (optional)
+  - Storage
+
+#### `jobscout/providers/base.py`
+- `Provider` abstract base class
+- `ProviderStats` for tracking errors/collected jobs
+
+#### `jobscout/dedupe.py`
+- `DedupeEngine`: Multi-layer deduplication
+  - Provider ID matching
+  - URL canonicalization
+  - Fuzzy matching (title + company)
+  - LLM arbitration for uncertain pairs (optional)
+
+---
+
+## API Endpoints
+
+### Public Endpoints
+
+#### `GET /api/v1/jobs`
+Query parameters:
+- `q`: Search query (title, company, description)
+- `location`: Location filter
+- `remote`: `remote`, `hybrid`, `onsite`
+- `employment`: `full_time`, `contract`, etc.
+- `source`: Source filter
+- `posted_since`: Days ago
+- `min_score`: Minimum AI score (0-100)
+- `sort`: `ai_score`, `posted_at`, `first_seen_at`
+- `page`: Page number (default: 1)
+- `page_size`: Items per page (default: 20, max: 50)
+
+Response:
+```json
+{
+  "jobs": [...],
+  "total": 188,
+  "page": 1,
+  "page_size": 20,
+  "has_more": true
+}
+```
+
+#### `GET /api/v1/jobs/{job_id}`
+Returns full job details including full description text.
+
+#### `POST /api/v1/scrape`
+Request body:
+```json
+{
+  "query": "automation engineer",
+  "location": "Remote",
+  "use_ai": false
+}
+```
+
+Response:
+```json
+{
+  "status": "queued",
+  "run_id": 2,
+  "message": "Scrape queued"
+}
+```
+
+Rate limits:
+- 6 requests/hour per IP
+- 1 concurrent scrape max
+
+#### `GET /api/v1/runs/{run_id}`
+Response:
+```json
+{
+  "run_id": 2,
+  "started_at": "2026-01-09T10:43:06Z",
+  "finished_at": null,
+  "jobs_collected": 192,
+  "jobs_new": 19,
+  "jobs_updated": 75,
+  "jobs_filtered": 23,
+  "errors": 0,
+  "sources": "remotive, remoteok, arbeitnow, weworkremotely",
+  "criteria": {...}
+}
+```
+
+#### `GET /api/v1/runs/latest`
+Returns the most recent run.
+
+#### `GET /api/v1/admin/stats`
+Public stats endpoint (no auth required).
+
+### Admin Endpoints
+
+#### `POST /api/v1/admin/run`
+Requires `Authorization: Bearer {admin_token}` header.
+
+Request body:
+```json
+{
+  "query": "automation engineer",
+  "location": "Remote",
+  "use_ai": false
+}
+```
+
+---
+
+## Database Schema
+
+### `jobs` table (PostgreSQL)
+
+```sql
+CREATE TABLE jobs (
+    job_id TEXT PRIMARY KEY,              -- MD5 hash of provider_id + source
+    provider_id TEXT NOT NULL,
+    scraped_at TIMESTAMPTZ NOT NULL,
+    posted_at TIMESTAMPTZ,
+    expires_at TIMESTAMPTZ,
+    first_seen_at TIMESTAMPTZ NOT NULL,
+    last_seen_at TIMESTAMPTZ NOT NULL,
+    
+    -- Core fields
+    title TEXT NOT NULL,
+    company TEXT NOT NULL,
+    location_raw TEXT,
+    country TEXT,
+    city TEXT,
+    remote_type TEXT,                     -- 'remote', 'hybrid', 'onsite', 'unknown'
+    employment_types TEXT[],              -- ['full_time', 'contract', ...]
+    
+    -- URLs
+    job_url TEXT NOT NULL,
+    apply_url TEXT,
+    company_website TEXT,
+    linkedin_url TEXT,
+    
+    -- Content
+    description_text TEXT,
+    description_html TEXT,
+    emails TEXT[],
+    
+    -- Metadata
+    source TEXT NOT NULL,                 -- 'remoteok', 'weworkremotely', etc.
+    source_url TEXT,
+    tags TEXT[],
+    salary_min NUMERIC,
+    salary_max NUMERIC,
+    salary_currency TEXT,
+    
+    -- AI fields (nullable)
+    ai_score REAL,                        -- 0-100 relevance score
+    ai_reasons TEXT,
+    ai_remote_type TEXT,
+    ai_employment_types TEXT[],
+    ai_seniority TEXT,
+    ai_confidence REAL,
+    ai_summary TEXT,
+    ai_requirements TEXT,
+    ai_tech_stack TEXT[],                 -- Stored as JSON array
+    ai_company_domain TEXT,
+    ai_company_summary TEXT,
+    ai_flags TEXT[],                      -- ['low_salary', 'vague_description', ...]
+    
+    -- Raw data
+    raw_data JSONB
+);
+
+CREATE INDEX idx_jobs_source ON jobs(source);
+CREATE INDEX idx_jobs_posted_at ON jobs(posted_at DESC);
+CREATE INDEX idx_jobs_first_seen_at ON jobs(first_seen_at DESC);
+CREATE INDEX idx_jobs_ai_score ON jobs(ai_score DESC NULLS LAST);
+CREATE INDEX idx_jobs_remote_type ON jobs(remote_type);
+```
+
+### `runs` table
+
+```sql
+CREATE TABLE runs (
+    run_id SERIAL PRIMARY KEY,
+    started_at TIMESTAMPTZ NOT NULL,
+    finished_at TIMESTAMPTZ,
+    criteria JSONB NOT NULL,              -- Search criteria used
+    jobs_collected INTEGER DEFAULT 0,
+    jobs_new INTEGER DEFAULT 0,
+    jobs_updated INTEGER DEFAULT 0,
+    jobs_filtered INTEGER DEFAULT 0,
+    errors INTEGER DEFAULT 0,
+    sources TEXT,                         -- Comma-separated list
+    error_summary TEXT
+);
+
+CREATE INDEX idx_runs_started_at ON runs(started_at DESC);
+```
+
+### `llm_cache` table (SQLite only, for LLM response caching)
+
+```sql
+CREATE TABLE llm_cache (
+    key TEXT PRIMARY KEY,                 -- Hash of prompt
+    response TEXT NOT NULL,
+    created_at TEXT NOT NULL
+);
+```
+
+---
+
+## Environment Variables
+
+### Backend (`backend/.env` or Fly.io secrets)
+
+```bash
+# Database
+JOBSCOUT_DATABASE_URL=postgresql://user:pass@host:port/db?sslmode=require
+JOBSCOUT_USE_SQLITE=false
+JOBSCOUT_SQLITE_PATH=jobs.db
+
+# CORS (JSON array string)
+JOBSCOUT_CORS_ORIGINS='["https://jobscoutai.vercel.app","http://localhost:3000"]'
+
+# Admin
+JOBSCOUT_ADMIN_TOKEN=your-long-random-token-here
+
+# Scraper defaults
+JOBSCOUT_DEFAULT_SEARCH_QUERY=automation engineer
+JOBSCOUT_DEFAULT_LOCATION=Remote
+JOBSCOUT_SCRAPE_INTERVAL_HOURS=6
+
+# AI (optional)
+JOBSCOUT_OPENAI_API_KEY=sk-...
+JOBSCOUT_OPENAI_MODEL=gpt-4o-mini
+JOBSCOUT_AI_ENABLED=false
+JOBSCOUT_AI_MAX_JOBS=50
+
+# Public scrape guardrails
+JOBSCOUT_PUBLIC_SCRAPE_ENABLED=true
+JOBSCOUT_PUBLIC_SCRAPE_MAX_CONCURRENT=1
+JOBSCOUT_PUBLIC_SCRAPE_RATE_LIMIT_PER_HOUR=6
+JOBSCOUT_PUBLIC_SCRAPE_MAX_RESULTS_PER_SOURCE=200
+```
+
+### Frontend (`frontend/.env.local` or Vercel env vars)
+
+```bash
+NEXT_PUBLIC_API_URL=https://jobscout-api.fly.dev/api/v1
+```
+
+---
+
+## Development Workflow
+
+### Local Setup
+
+1. **Backend:**
+   ```bash
+   cd backend
+   pip install -r requirements.txt
+   cp env.sample .env
+   # Edit .env with your settings
+   uvicorn backend.app.main:app --reload
+   ```
+
+2. **Frontend:**
+   ```bash
+   cd frontend
+   npm install
+   cp env.sample .env.local
+   # Edit .env.local with NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
+   npm run dev
+   ```
+
+3. **Database:**
+   - For local dev, set `JOBSCOUT_USE_SQLITE=true` in backend `.env`
+   - SQLite DB will be created at `JOBSCOUT_SQLITE_PATH` (default: `jobs.db`)
+
+### Testing Changes
+
+1. **Backend API:**
+   - Visit `http://localhost:8000/docs` for Swagger UI
+   - Test endpoints interactively
+
+2. **Frontend:**
+   - Visit `http://localhost:3000`
+   - Trigger scrape, check job details page
+
+3. **CLI (core library):**
+   ```bash
+   python -m jobscout "test query" --verbose
+   ```
+
+### Code Style
+
+- **Python**: Follow PEP 8, use type hints
+- **TypeScript**: Use strict mode, prefer functional components
+- **Formatting**: No enforced formatter (yet), but be consistent
+
+---
+
+## Common Tasks
+
+### Adding a New Job Provider
+
+1. Create `jobscout/providers/{name}.py`:
+   ```python
+   from jobscout.providers.base import Provider
+   from jobscout.models import NormalizedJob, Criteria
+   
+   class MyProvider(Provider):
+       name = "myprovider"
+       
+       async def collect(self, fetcher, criteria):
+           # Fetch jobs from API/RSS/scraping
+           # Return List[NormalizedJob]
+           pass
+   ```
+
+2. Register in `jobscout/providers/__init__.py`
+
+3. Add to `jobscout/orchestrator.py` provider list
+
+### Fixing Provider Errors
+
+- Check `provider.stats.error_messages` in logs
+- Common issues:
+  - API endpoint changed
+  - HTML structure changed
+  - Rate limiting
+  - Network timeouts
+
+### Adding a New API Endpoint
+
+1. Create/update `backend/app/api/{name}.py`
+2. Add router to `backend/app/main.py`:
+   ```python
+   from backend.app.api import {name}
+   app.include_router({name}.router, prefix=settings.api_prefix)
+   ```
+
+### Updating Frontend Components
+
+- Components are in `frontend/components/`
+- Use Tailwind CSS for styling
+- Follow existing patterns (minimal, clean design)
+
+### Debugging Scrape Issues
+
+1. Check Fly.io logs: `fly logs -a jobscout-api`
+2. Check run status: `GET /api/v1/runs/{run_id}`
+3. Check provider stats in orchestrator logs
+4. Test provider individually in CLI
+
+---
+
+## Deployment
+
+### Backend (Fly.io)
+
+1. **Set secrets:**
+   ```bash
+   fly secrets set JOBSCOUT_DATABASE_URL="..." -a jobscout-api
+   fly secrets set JOBSCOUT_CORS_ORIGINS='["https://jobscoutai.vercel.app"]' -a jobscout-api
+   fly secrets set JOBSCOUT_ADMIN_TOKEN="..." -a jobscout-api
+   ```
+
+2. **Deploy:**
+   ```bash
+   fly deploy -a jobscout-api
+   ```
+
+3. **Check logs:**
+   ```bash
+   fly logs -a jobscout-api
+   ```
+
+### Frontend (Vercel)
+
+1. Connect GitHub repo to Vercel
+2. Set environment variable: `NEXT_PUBLIC_API_URL=https://jobscout-api.fly.dev/api/v1`
+3. Deploy automatically on push to `main`
+
+### Database (Supabase)
+
+1. Create project at supabase.com
+2. Run SQL schema (see `DEPLOY.md`)
+3. Get connection string from Settings → Database
+4. Use **Session pooler** connection string (not Direct)
+
+---
+
+## Known Issues & TODOs
+
+### Current Issues
+
+1. **Job descriptions formatting**: ✅ Fixed with `FormattedDescription` component
+2. **Provider errors**: Some providers (Arbeitnow) may have parsing issues - check logs
+3. **CORS**: Ensure all frontend domains are in `JOBSCOUT_CORS_ORIGINS`
+
+### Future Enhancements
+
+1. **Better description parsing**: Use `extract_text_structured()` instead of `strip_html()` to preserve more structure
+2. **Email notifications**: Alert users when new jobs match their saved searches
+3. **User accounts**: Save favorite jobs, search history
+4. **More providers**: Add more job boards (Indeed, LinkedIn, etc.)
+5. **Better AI prompts**: Fine-tune ranking/classification prompts
+6. **Export features**: CSV/Excel export from UI
+7. **Job alerts**: Email/Slack notifications for new matches
+
+### Technical Debt
+
+1. **Error handling**: More graceful degradation when providers fail
+2. **Caching**: Add Redis for job list caching
+3. **Testing**: Add unit tests for providers, deduplication
+4. **Monitoring**: Add Sentry/error tracking
+5. **Rate limiting**: More sophisticated rate limiting (per-user, per-query)
+
+---
+
+## Quick Reference
+
+### Key Files to Modify
+
+- **Add provider**: `jobscout/providers/{name}.py`
+- **Change API**: `backend/app/api/{name}.py`
+- **Update UI**: `frontend/components/{Component}.tsx`
+- **Fix scraping**: `jobscout/orchestrator.py`
+- **Database changes**: `backend/app/storage/postgres.py`
+
+### Important Functions
+
+- `run_scrape()`: Main orchestration (`jobscout/orchestrator.py`)
+- `enqueue_scrape_run()`: Background scrape trigger (`backend/app/worker.py`)
+- `upsert_job_from_dict()`: Save job to DB (`backend/app/storage/postgres.py`)
+- `DedupeEngine.dedupe()`: Remove duplicates (`jobscout/dedupe.py`)
+
+### Common Commands
+
+```bash
+# Backend logs
+fly logs -a jobscout-api
+
+# Test API
+curl https://jobscout-api.fly.dev/api/v1/jobs?q=engineer
+
+# Trigger scrape
+curl -X POST https://jobscout-api.fly.dev/api/v1/scrape \
+  -H "Content-Type: application/json" \
+  -d '{"query":"engineer","location":"Remote"}'
+
+# Local CLI scrape
+python -m jobscout "engineer" --verbose
+```
+
+---
+
+## Contact & Resources
+
+- **Repository**: https://github.com/binary-exe/jobscoutai
+- **Backend API**: https://jobscout-api.fly.dev/docs
+- **Frontend**: https://jobscoutai.vercel.app
+- **Deployment Guide**: See `DEPLOY.md`
+
+---
+
+**Last Updated**: 2026-01-09
+**Version**: 1.0.0

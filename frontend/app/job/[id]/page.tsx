@@ -17,6 +17,7 @@ import {
 } from 'lucide-react';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
+import { FormattedDescription } from '@/components/FormattedDescription';
 import { getJob, formatRelativeTime, formatSalary } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
@@ -216,9 +217,10 @@ export default async function JobPage({ params }: PageProps) {
           {job.description_text && (
             <div className="mt-6 rounded-xl border border-border bg-background p-6 sm:p-8">
               <h2 className="text-lg font-semibold mb-4">Job Description</h2>
-              <div className="prose prose-sm max-w-none text-foreground prose-headings:text-foreground prose-strong:text-foreground">
-                <div className="whitespace-pre-wrap">{job.description_text}</div>
-              </div>
+              <FormattedDescription 
+                text={job.description_text}
+                className="prose-headings:text-foreground prose-headings:font-semibold prose-headings:mt-6 prose-headings:mb-3 prose-headings:text-base prose-p:text-muted-foreground prose-p:mb-4 prose-p:leading-relaxed prose-ul:my-4 prose-ul:space-y-2 prose-li:text-muted-foreground prose-li:leading-relaxed prose-li:marker:text-foreground/40"
+              />
             </div>
           )}
           
