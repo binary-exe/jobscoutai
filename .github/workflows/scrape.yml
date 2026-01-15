@@ -74,14 +74,45 @@ jobs:
           
           # Remove trailing slash from API_URL if present
           API_URL=$(echo "$API_URL" | sed 's|/$||')
-          ENDPOINT="${API_URL}/api/v1/admin/run"
+          
+          # Check if API_URL already contains /api/v1
+          if echo "$API_URL" | grep -q "/api/v1"; then
+            echo "⚠️  Warning: API_URL already contains /api/v1"
+            echo "  API_URL: $API_URL"
+            ENDPOINT="${API_URL}/admin/run"
+          else
+            ENDPOINT="${API_URL}/api/v1/admin/run"
+          fi
           
           echo "Triggering scrape:"
           echo "  Query: $QUERY"
           echo "  Location: Remote"
           echo "  Use AI: $USE_AI"
-          echo "  Endpoint: $ENDPOINT"
+          echo "  Base API_URL: $API_URL"
+          echo "  Full Endpoint: $ENDPOINT"
           echo "  Token present: $([ -n "$ADMIN_TOKEN" ] && echo "yes" || echo "no")"
+          
+          # Test if backend is reachable
+          echo ""
+          echo "Testing backend connectivity..."
+          HEALTH_CHECK=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/health" --max-time 5 || echo "000")
+          if [ "$HEALTH_CHECK" = "200" ]; then
+            echo "  ✅ Backend is reachable at $API_URL"
+          else
+            echo "  ⚠️  Backend health check returned: $HEALTH_CHECK"
+            echo "  This might indicate the API_URL is incorrect or backend is down"
+            echo "  Expected: https://jobscout-api.fly.dev (without /api/v1)"
+          fi
+          
+          # Try to access docs to verify API structure
+          echo ""
+          echo "Verifying API structure..."
+          DOCS_CHECK=$(curl -s -o /dev/null -w "%{http_code}" "${API_URL}/docs" --max-time 5 || echo "000")
+          if [ "$DOCS_CHECK" = "200" ]; then
+            echo "  ✅ API docs accessible - endpoint structure looks correct"
+          else
+            echo "  ⚠️  API docs check returned: $DOCS_CHECK"
+          fi
           
           # Build JSON payload (escape quotes in query)
           QUERY_ESCAPED=$(echo "$QUERY" | sed 's/"/\\"/g')
