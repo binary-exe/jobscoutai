@@ -826,7 +826,29 @@ fly logs -a jobscout-api
 **Important**: 
 - Uses `backend/Dockerfile` for build
 - Auto-scales based on traffic
-- Scheduled scrapes run via APScheduler
+- Scheduled scrapes run via APScheduler (on Fly.io) OR GitHub Actions (optional)
+
+### Scheduled Scrapes (GitHub Actions - Optional)
+
+**Note**: The backend also runs scheduled scrapes via APScheduler on Fly.io. GitHub Actions is an optional alternative.
+
+**Setup:**
+1. Go to GitHub repo → Settings → Secrets and variables → Actions
+2. Add these secrets:
+   - `API_URL`: Backend API URL (e.g., `https://jobscout-api.fly.dev`)
+   - `ADMIN_TOKEN`: Same token as `JOBSCOUT_ADMIN_TOKEN` in Fly.io
+
+**Workflow:**
+- Located at `.github/workflows/scrape.yml`
+- Runs every 6 hours (00:00, 06:00, 12:00, 18:00 UTC)
+- Can also be triggered manually via "Run workflow" button
+- Calls `POST /api/v1/admin/run` endpoint
+
+**Troubleshooting:**
+- Check workflow runs in GitHub Actions tab
+- Verify secrets are set correctly
+- Check backend logs: `fly logs -a jobscout-api`
+- Ensure `API_URL` doesn't include `/api/v1` (workflow adds it)
 
 ### Frontend (Vercel)
 

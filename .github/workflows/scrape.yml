@@ -14,25 +14,75 @@ on:
         required: false
         default: 'automation engineer'
       use_ai:
-        description: 'Enable AI features'
+        description: 'Enable AI features (true/false)'
         required: false
-        default: 'true'
+        default: 'false'
+        type: string
 
 jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
+      - name: Set defaults
+        id: defaults
+        run: |
+          # Set query (default: "automation engineer")
+          if [ -z "${{ github.event.inputs.query }}" ]; then
+            echo "query=automation engineer" >> $GITHUB_OUTPUT
+          else
+            echo "query=${{ github.event.inputs.query }}" >> $GITHUB_OUTPUT
+          fi
+          
+          # Set use_ai boolean (default: false)
+          if [ -z "${{ github.event.inputs.use_ai }}" ]; then
+            echo "use_ai=false" >> $GITHUB_OUTPUT
+          else
+            USE_AI_LOWER=$(echo "${{ github.event.inputs.use_ai }}" | tr '[:upper:]' '[:lower:]')
+            if [ "$USE_AI_LOWER" = "true" ] || [ "$USE_AI_LOWER" = "1" ] || [ "$USE_AI_LOWER" = "yes" ]; then
+              echo "use_ai=true" >> $GITHUB_OUTPUT
+            else
+              echo "use_ai=false" >> $GITHUB_OUTPUT
+            fi
+          fi
+
       - name: Trigger scrape
         run: |
-          curl -X POST "${{ secrets.API_URL }}/admin/run" \
+          QUERY="${{ steps.defaults.outputs.query }}"
+          USE_AI="${{ steps.defaults.outputs.use_ai }}"
+          
+          echo "Triggering scrape:"
+          echo "  Query: $QUERY"
+          echo "  Location: Remote"
+          echo "  Use AI: $USE_AI"
+          echo "  API URL: ${{ secrets.API_URL }}/api/v1/admin/run"
+          
+          # Build JSON payload (escape quotes in query)
+          QUERY_ESCAPED=$(echo "$QUERY" | sed 's/"/\\"/g')
+          JSON_PAYLOAD="{\"query\":\"$QUERY_ESCAPED\",\"location\":\"Remote\",\"use_ai\":$USE_AI}"
+          
+          # Make request and capture response
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ secrets.API_URL }}/api/v1/admin/run" \
             -H "Authorization: Bearer ${{ secrets.ADMIN_TOKEN }}" \
             -H "Content-Type: application/json" \
-            -d '{
-              "query": "${{ github.event.inputs.query || 'automation engineer' }}",
-              "location": "Remote",
-              "use_ai": ${{ github.event.inputs.use_ai || 'true' }}
-            }' \
-            --fail --show-error
+            -d "$JSON_PAYLOAD")
+          
+          HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+          BODY=$(echo "$RESPONSE" | sed '$d')
+          
+          echo ""
+          echo "Response:"
+          echo "  HTTP Code: $HTTP_CODE"
+          echo "  Body: $BODY"
+          
+          if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
+            echo ""
+            echo "✅ Scrape triggered successfully"
+            exit 0
+          else
+            echo ""
+            echo "❌ Failed to trigger scrape (HTTP $HTTP_CODE)"
+            exit 1
+          fi
         env:
           API_URL: ${{ secrets.API_URL }}
           ADMIN_TOKEN: ${{ secrets.ADMIN_TOKEN }}
