@@ -23,6 +23,26 @@ jobs:
   scrape:
     runs-on: ubuntu-latest
     steps:
+      - name: Verify secrets
+        run: |
+          if [ -z "${{ secrets.API_URL }}" ]; then
+            echo "❌ Error: API_URL secret is not set"
+            echo "Go to Settings → Secrets and variables → Actions → New repository secret"
+            echo "Name: API_URL"
+            echo "Value: https://jobscout-api.fly.dev"
+            exit 1
+          fi
+          
+          if [ -z "${{ secrets.ADMIN_TOKEN }}" ]; then
+            echo "❌ Error: ADMIN_TOKEN secret is not set"
+            echo "Go to Settings → Secrets and variables → Actions → New repository secret"
+            echo "Name: ADMIN_TOKEN"
+            echo "Value: (same as JOBSCOUT_ADMIN_TOKEN in Fly.io)"
+            exit 1
+          fi
+          
+          echo "✅ Secrets verified"
+
       - name: Set defaults
         id: defaults
         run: |
@@ -49,38 +69,71 @@ jobs:
         run: |
           QUERY="${{ steps.defaults.outputs.query }}"
           USE_AI="${{ steps.defaults.outputs.use_ai }}"
+          API_URL="${{ secrets.API_URL }}"
+          ADMIN_TOKEN="${{ secrets.ADMIN_TOKEN }}"
+          
+          # Remove trailing slash from API_URL if present
+          API_URL=$(echo "$API_URL" | sed 's|/$||')
+          ENDPOINT="${API_URL}/api/v1/admin/run"
           
           echo "Triggering scrape:"
           echo "  Query: $QUERY"
           echo "  Location: Remote"
           echo "  Use AI: $USE_AI"
-          echo "  API URL: ${{ secrets.API_URL }}/api/v1/admin/run"
+          echo "  Endpoint: $ENDPOINT"
+          echo "  Token present: $([ -n "$ADMIN_TOKEN" ] && echo "yes" || echo "no")"
           
           # Build JSON payload (escape quotes in query)
           QUERY_ESCAPED=$(echo "$QUERY" | sed 's/"/\\"/g')
           JSON_PAYLOAD="{\"query\":\"$QUERY_ESCAPED\",\"location\":\"Remote\",\"use_ai\":$USE_AI}"
           
+          echo ""
+          echo "Request payload:"
+          echo "$JSON_PAYLOAD" | jq . 2>/dev/null || echo "$JSON_PAYLOAD"
+          echo ""
+          
           # Make request and capture response
-          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "${{ secrets.API_URL }}/api/v1/admin/run" \
-            -H "Authorization: Bearer ${{ secrets.ADMIN_TOKEN }}" \
+          RESPONSE=$(curl -s -w "\n%{http_code}" -X POST "$ENDPOINT" \
+            -H "Authorization: Bearer $ADMIN_TOKEN" \
             -H "Content-Type: application/json" \
-            -d "$JSON_PAYLOAD")
+            -d "$JSON_PAYLOAD" \
+            --max-time 30 \
+            --connect-timeout 10)
           
           HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
           BODY=$(echo "$RESPONSE" | sed '$d')
           
-          echo ""
           echo "Response:"
           echo "  HTTP Code: $HTTP_CODE"
           echo "  Body: $BODY"
+          echo ""
           
           if [ "$HTTP_CODE" -ge 200 ] && [ "$HTTP_CODE" -lt 300 ]; then
-            echo ""
             echo "✅ Scrape triggered successfully"
+            if echo "$BODY" | grep -q "run_id"; then
+              RUN_ID=$(echo "$BODY" | grep -o '"run_id":[0-9]*' | grep -o '[0-9]*')
+              echo "  Run ID: $RUN_ID"
+            fi
             exit 0
           else
-            echo ""
             echo "❌ Failed to trigger scrape (HTTP $HTTP_CODE)"
+            case "$HTTP_CODE" in
+              401)
+                echo "  Error: Unauthorized - Check your ADMIN_TOKEN"
+                ;;
+              403)
+                echo "  Error: Forbidden - Invalid ADMIN_TOKEN"
+                ;;
+              404)
+                echo "  Error: Not Found - Check your API_URL endpoint"
+                ;;
+              500)
+                echo "  Error: Server Error - Check backend logs"
+                ;;
+              *)
+                echo "  Error: Unexpected response"
+                ;;
+            esac
             exit 1
           fi
         env:
