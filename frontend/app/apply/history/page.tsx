@@ -112,67 +112,69 @@ export default function HistoryPage() {
                 </div>
               ))}
             </div>
-          ) : activeTab === 'packs' && packs.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-border bg-card p-16 text-center">
-              <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
-              <h3 className="font-semibold mb-2">No apply packs yet</h3>
-              <p className="text-sm text-muted-foreground mb-4">
-                Generate your first apply pack to get started.
-              </p>
-              <Link
-                href="/apply"
-                className="inline-block rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
-              >
-                Create Apply Pack
-              </Link>
-            </div>
-          ) : (
-            <div className="space-y-4">
-              {packs.map((pack) => (
-                <div key={pack.apply_pack_id} className="rounded-xl border border-border bg-card p-6">
-                  <div className="flex items-start justify-between">
-                    <div className="flex-1">
-                      <h3 className="font-semibold mb-1">
-                        {pack.title || 'Untitled Job'}
-                      </h3>
-                      {pack.company && (
-                        <p className="text-sm text-muted-foreground mb-2">{pack.company}</p>
-                      )}
-                      <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                        <div className="flex items-center gap-1">
-                          <Clock className="h-3 w-3" />
-                          {new Date(pack.created_at).toLocaleDateString()}
+          ) : activeTab === 'packs' ? (
+            packs.length === 0 ? (
+              <div className="rounded-xl border border-dashed border-border bg-card p-16 text-center">
+                <FileText className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+                <h3 className="font-semibold mb-2">No apply packs yet</h3>
+                <p className="text-sm text-muted-foreground mb-4">
+                  Generate your first apply pack to get started.
+                </p>
+                <Link
+                  href="/apply"
+                  className="inline-block rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  Create Apply Pack
+                </Link>
+              </div>
+            ) : (
+              <div className="space-y-4">
+                {packs.map((pack) => (
+                  <div key={pack.apply_pack_id} className="rounded-xl border border-border bg-card p-6">
+                    <div className="flex items-start justify-between">
+                      <div className="flex-1">
+                        <h3 className="font-semibold mb-1">
+                          {pack.title || 'Untitled Job'}
+                        </h3>
+                        {pack.company && (
+                          <p className="text-sm text-muted-foreground mb-2">{pack.company}</p>
+                        )}
+                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
+                          <div className="flex items-center gap-1">
+                            <Clock className="h-3 w-3" />
+                            {new Date(pack.created_at).toLocaleDateString()}
+                          </div>
                         </div>
                       </div>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {pack.job_url && (
-                        <a
-                          href={pack.job_url}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="p-2 rounded-lg border border-border hover:bg-muted"
-                        >
-                          <ExternalLink className="h-4 w-4" />
-                        </a>
-                      )}
-                      <button
-                        onClick={() => handleExport(pack.apply_pack_id, 'combined')}
-                        disabled={exporting === pack.apply_pack_id}
-                        className="p-2 rounded-lg border border-border hover:bg-muted disabled:opacity-50"
-                        title="Download DOCX"
-                      >
-                        {exporting === pack.apply_pack_id ? (
-                          <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
-                        ) : (
-                          <Download className="h-4 w-4" />
+                      <div className="flex items-center gap-2">
+                        {pack.job_url && (
+                          <a
+                            href={pack.job_url}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="p-2 rounded-lg border border-border hover:bg-muted"
+                          >
+                            <ExternalLink className="h-4 w-4" />
+                          </a>
                         )}
-                      </button>
+                        <button
+                          onClick={() => handleExport(pack.apply_pack_id, 'combined')}
+                          disabled={exporting === pack.apply_pack_id}
+                          className="p-2 rounded-lg border border-border hover:bg-muted disabled:opacity-50"
+                          title="Download DOCX"
+                        >
+                          {exporting === pack.apply_pack_id ? (
+                            <div className="h-4 w-4 border-2 border-primary border-t-transparent rounded-full animate-spin" />
+                          ) : (
+                            <Download className="h-4 w-4" />
+                          )}
+                        </button>
+                      </div>
                     </div>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )
           ) : activeTab === 'applications' && applications.length === 0 ? (
             <div className="rounded-xl border border-dashed border-border bg-card p-16 text-center">
               <Briefcase className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
