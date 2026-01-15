@@ -295,17 +295,17 @@ async def generate_trust_report(
         # Check if trust report already exists
         existing = await apply_storage.get_trust_report(conn, job_target_id)
         if existing:
-        return TrustReportResponse(
-            trust_report_id=str(existing["trust_report_id"]),
-            scam_risk=existing["scam_risk"],
-            scam_reasons=existing.get("scam_reasons", []),
-            ghost_likelihood=existing["ghost_likelihood"],
-            ghost_reasons=existing.get("ghost_reasons", []),
-            staleness_score=existing.get("staleness_score"),
-            staleness_reasons=existing.get("staleness_reasons"),
-            scam_score=None,  # Not stored in DB yet
-            ghost_score=None,  # Not stored in DB yet
-        )
+            return TrustReportResponse(
+                trust_report_id=str(existing["trust_report_id"]),
+                scam_risk=existing["scam_risk"],
+                scam_reasons=existing.get("scam_reasons", []),
+                ghost_likelihood=existing["ghost_likelihood"],
+                ghost_reasons=existing.get("ghost_reasons", []),
+                staleness_score=existing.get("staleness_score"),
+                staleness_reasons=existing.get("staleness_reasons"),
+                scam_score=None,  # Not stored in DB yet
+                ghost_score=None,  # Not stored in DB yet
+            )
         
         # Parse dates
         posted_at = None
