@@ -107,6 +107,19 @@ async def parse_job(
         raise HTTPException(status_code=400, detail="Either job_url or job_text is required")
     
     async with db.connection() as conn:
+        # Ensure user exists in this connection
+        user = await apply_storage.get_user(conn, user_id)
+        if not user:
+            # User doesn't exist, create it with the provided user_id
+            await conn.execute(
+                """
+                INSERT INTO users (user_id, plan) 
+                VALUES ($1, 'free')
+                ON CONFLICT (user_id) DO NOTHING
+                """,
+                user_id
+            )
+        
         job_hash = apply_storage.hash_job_target(
             str(request.job_url) if request.job_url else None,
             request.job_text
