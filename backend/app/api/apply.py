@@ -89,7 +89,11 @@ async def get_user_id(x_user_id: Optional[str] = Header(None, alias="X-User-ID")
     # Create anonymous user
     async with db.connection() as conn:
         user = await apply_storage.get_or_create_user(conn)
-        return UUID(user["user_id"])
+        user_id_val = user["user_id"]
+        # Handle asyncpg UUID objects
+        if isinstance(user_id_val, UUID):
+            return user_id_val
+        return UUID(user_id_val) if isinstance(user_id_val, str) else UUID(str(user_id_val))
 
 
 # ==================== Endpoints ====================
@@ -605,12 +609,21 @@ async def generate_apply_pack(
             use_ai=request.use_ai,
         )
         
+        # Convert UUIDs if needed (asyncpg returns UUID objects, not strings)
+        resume_id_val = resume["resume_id"]
+        if not isinstance(resume_id_val, UUID):
+            resume_id_val = UUID(resume_id_val) if isinstance(resume_id_val, str) else UUID(str(resume_id_val))
+        
+        job_target_id_val = job_target["job_target_id"]
+        if not isinstance(job_target_id_val, UUID):
+            job_target_id_val = UUID(job_target_id_val) if isinstance(job_target_id_val, str) else UUID(str(job_target_id_val))
+        
         # Save apply pack
         apply_pack = await apply_storage.create_apply_pack(
             conn,
             user_id=user_id,
-            resume_id=UUID(resume["resume_id"]),
-            job_target_id=UUID(job_target["job_target_id"]),
+            resume_id=resume_id_val,
+            job_target_id=job_target_id_val,
             pack_hash=pack_hash,
             tailored_summary=pack_data.get("tailored_summary"),
             tailored_bullets=pack_data.get("tailored_bullets"),
@@ -620,7 +633,10 @@ async def generate_apply_pack(
         )
         
         # Record usage
-        await apply_storage.record_usage(conn, user_id, "apply_pack", UUID(apply_pack["apply_pack_id"]))
+        apply_pack_id_val = apply_pack["apply_pack_id"]
+        if not isinstance(apply_pack_id_val, UUID):
+            apply_pack_id_val = UUID(apply_pack_id_val) if isinstance(apply_pack_id_val, str) else UUID(str(apply_pack_id_val))
+        await apply_storage.record_usage(conn, user_id, "apply_pack", apply_pack_id_val)
         
         import json
         bullets = pack_data.get("tailored_bullets", [])
