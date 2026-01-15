@@ -17,6 +17,7 @@ from backend.app.storage import apply_storage
 from backend.app.services import job_parser
 from backend.app.services import trust_analyzer
 from backend.app.services import resume_analyzer
+from backend.app.services import resume_parser
 from backend.app.services import job_analyzer
 from backend.app.services import apply_pack_generator
 
