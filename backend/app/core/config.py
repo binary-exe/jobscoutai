@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     sqlite_path: str = "jobs.db"
 
     # CORS
-    cors_origins: List[str] = ["http://localhost:3000", "https://jobscout.vercel.app"]
+    cors_origins: List[str] = ["http://localhost:3000", "https://jobscoutai.vercel.app"]
 
     # Admin
     admin_token: str = ""  # Required for POST /admin/run
