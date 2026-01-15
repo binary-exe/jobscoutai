@@ -41,6 +41,13 @@ class Settings(BaseSettings):
     # Rate limiting
     max_results_per_page: int = 50
 
+    # Paddle (payment processor)
+    paddle_vendor_id: Optional[str] = None
+    paddle_api_key: Optional[str] = None
+    paddle_public_key: Optional[str] = None
+    paddle_webhook_secret: Optional[str] = None
+    paddle_environment: str = "sandbox"  # sandbox or production
+
     class Config:
         env_prefix = "JOBSCOUT_"
         env_file = ".env"

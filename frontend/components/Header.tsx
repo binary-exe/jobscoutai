@@ -16,13 +16,31 @@ export function Header() {
         
         <nav className="ml-auto flex items-center space-x-1">
           <Link 
+            href="/apply"
+            className="px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:text-foreground"
+          >
+            Apply Workspace
+          </Link>
+          <Link 
             href="/"
             className="px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            Jobs
+            Browse Jobs
+          </Link>
+          <Link 
+            href="/pricing"
+            className="px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Pricing
+          </Link>
+          <Link 
+            href="/account"
+            className="px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Account
           </Link>
           <a 
-            href="https://github.com/yourusername/jobscout"
+            href="https://github.com/binary-exe/jobscoutai"
             target="_blank"
             rel="noopener noreferrer"
             className="px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"

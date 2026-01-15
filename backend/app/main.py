@@ -9,7 +9,7 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import db
-from backend.app.api import jobs, admin
+from backend.app.api import jobs, admin, apply, paddle
 
 
 @asynccontextmanager
@@ -69,6 +69,8 @@ def create_app() -> FastAPI:
     # Routes
     app.include_router(jobs.router, prefix=settings.api_prefix)
     app.include_router(admin.router, prefix=settings.api_prefix)
+    app.include_router(apply.router, prefix=settings.api_prefix)
+    app.include_router(paddle.router, prefix=settings.api_prefix)
 
     @app.get("/")
     async def root():
