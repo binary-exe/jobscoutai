@@ -8,7 +8,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Depends, Header, Response
+from fastapi import APIRouter, HTTPException, Depends, Header, Response, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, HttpUrl
 
@@ -145,6 +145,10 @@ async def parse_job(
             job_data = job_parser.parse_job_text(request.job_text)
             extraction_method = "text"
         
+        # Analyze job description to extract requirements, keywords, must-haves
+        description_text = job_data.get("description_text") or request.job_text or ""
+        job_analysis = await job_analyzer.analyze_job(description_text, use_ai=False)  # Use heuristic for now (faster)
+        
         # Create job target with extracted data
         job_target = await apply_storage.create_job_target(
             conn,
@@ -160,10 +164,12 @@ async def parse_job(
             salary_min=job_data.get("salary_min"),
             salary_max=job_data.get("salary_max"),
             salary_currency=job_data.get("salary_currency"),
-            description_text=job_data.get("description_text"),
-            requirements=None,  # TODO: Extract from description
-            keywords=None,  # TODO: Extract from description
-            must_haves=None,  # TODO: Extract from description
+            description_text=description_text,
+            requirements=job_analysis.get("must_haves"),  # Store must-haves as requirements
+            keywords=job_analysis.get("keywords"),
+            must_haves=job_analysis.get("must_haves"),
+            role_rubric=job_analysis.get("rubric"),
+            html=job_data.get("html"),  # Store HTML for trust report regeneration
         )
         
         return {
@@ -182,6 +188,58 @@ async def parse_job(
             "extracted": False,
             "extraction_method": extraction_method,
         }
+
+
+@router.post("/resume/upload")
+async def upload_resume(
+    file: UploadFile = File(...),
+    user_id: UUID = Depends(get_user_id),
+):
+    """
+    Upload a resume file (PDF or DOCX) and extract text.
+    
+    Returns extracted text that can be used for apply pack generation.
+    """
+    # Validate file type
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="No filename provided")
+    
+    file_lower = file.filename.lower()
+    if not (file_lower.endswith('.pdf') or file_lower.endswith('.docx') or file_lower.endswith('.doc')):
+        raise HTTPException(
+            status_code=400,
+            detail="Unsupported file type. Supported: PDF, DOCX"
+        )
+    
+    # Check file size (max 10MB)
+    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+    file_content = await file.read()
+    if len(file_content) > MAX_FILE_SIZE:
+        raise HTTPException(
+            status_code=400,
+            detail=f"File too large. Maximum size: 10MB"
+        )
+    
+    # Parse the file
+    result = await resume_parser.parse_resume_file(file_content, file.filename)
+    
+    if result.get("error"):
+        raise HTTPException(
+            status_code=400,
+            detail=result["error"]
+        )
+    
+    if not result.get("text") or len(result["text"].strip()) < 50:
+        raise HTTPException(
+            status_code=400,
+            detail="Could not extract sufficient text from file. Please ensure the file is a valid resume."
+        )
+    
+    return {
+        "resume_text": result["text"],
+        "filename": file.filename,
+        "size": len(file_content),
+    }
 
 
 @router.put("/job/{job_target_id}")
@@ -316,6 +374,9 @@ async def generate_trust_report(
         if job_target.get("expires_at"):
             expires_at = job_target["expires_at"]
         
+        # Get stored HTML if available
+        stored_html = job_target.get("html")
+        
         # Generate trust report
         report_data = await trust_analyzer.generate_trust_report(
             job_target_id=str(job_target_id),
@@ -323,7 +384,7 @@ async def generate_trust_report(
             description_text=job_target.get("description_text"),
             posted_at=posted_at,
             expires_at=expires_at,
-            html=None,  # TODO: Store HTML in job_targets if needed
+            html=stored_html,  # Use stored HTML if available
         )
         
         # Save trust report
@@ -561,8 +622,49 @@ async def get_apply_pack(
 ):
     """Get an apply pack by ID."""
     async with db.connection() as conn:
-        # TODO: Implement fetch
-        raise HTTPException(status_code=501, detail="Not implemented yet")
+        # Fetch apply pack with related data
+        row = await conn.fetchrow(
+            """
+            SELECT ap.*, rv.resume_text, jt.title, jt.company, jt.job_url, jt.description_text as job_description
+            FROM apply_packs ap
+            LEFT JOIN resume_versions rv ON ap.resume_id = rv.resume_id
+            LEFT JOIN job_targets jt ON ap.job_target_id = jt.job_target_id
+            WHERE ap.apply_pack_id = $1 AND ap.user_id = $2
+            """,
+            apply_pack_id, user_id
+        )
+        
+        if not row:
+            raise HTTPException(status_code=404, detail="Apply pack not found")
+        
+        # Parse JSON fields
+        import json
+        tailored_bullets = row.get("tailored_bullets")
+        if isinstance(tailored_bullets, str):
+            try:
+                tailored_bullets = json.loads(tailored_bullets)
+            except:
+                tailored_bullets = []
+        elif tailored_bullets is None:
+            tailored_bullets = []
+        
+        ats_checklist = row.get("ats_checklist")
+        if isinstance(ats_checklist, str):
+            try:
+                ats_checklist = json.loads(ats_checklist)
+            except:
+                ats_checklist = {}
+        elif ats_checklist is None:
+            ats_checklist = {}
+        
+        return ApplyPackResponse(
+            apply_pack_id=str(row["apply_pack_id"]),
+            tailored_summary=row.get("tailored_summary"),
+            tailored_bullets=tailored_bullets,
+            cover_note=row.get("cover_note"),
+            ats_checklist=ats_checklist,
+            keyword_coverage=float(row.get("keyword_coverage", 0)) if row.get("keyword_coverage") else None,
+        )
 
 
 @router.get("/history")

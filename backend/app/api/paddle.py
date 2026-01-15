@@ -265,20 +265,155 @@ async def get_checkout_url(
     """
     Get Paddle checkout URL for user.
     
+    Creates a checkout link via Paddle API for the Pro subscription (€9/month).
     Returns checkout URL that user can redirect to.
+    
+    Note: Requires Paddle product and price setup in Paddle dashboard.
+    Set JOBSCOUT_PADDLE_PRODUCT_ID environment variable with your product ID.
     """
     settings = get_settings()
     
-    if not settings.paddle_vendor_id or not settings.paddle_public_key:
-        raise HTTPException(status_code=500, detail="Paddle not configured")
+    if not settings.paddle_api_key:
+        raise HTTPException(status_code=500, detail="Paddle API key not configured")
     
-    # For now, return a simple checkout URL
-    # In production, you'd generate a proper checkout link via Paddle API
-    # This is a placeholder - you'll need to implement proper checkout link generation
-    
-    checkout_url = f"https://checkout.paddle.com/checkout/{settings.paddle_vendor_id}"
-    
-    return {
-        "checkout_url": checkout_url,
-        "message": "Redirect user to this URL to complete checkout",
-    }
+    # Get or create user to ensure we have a user record
+    async with db.connection() as conn:
+        user = await apply_storage.get_or_create_user(conn)
+        user_uuid = UUID(user["user_id"])
+        
+        # Check if user already has a subscription
+        if user.get("plan") == "paid" and user.get("subscription_status") == "active":
+            raise HTTPException(
+                status_code=400,
+                detail="User already has an active subscription"
+            )
+        
+        # Determine API base URL based on environment
+        if settings.paddle_environment == "production":
+            api_base = "https://api.paddle.com"
+        else:
+            api_base = "https://sandbox-api.paddle.com"
+        
+        try:
+            import httpx
+            
+            # Get or create Paddle customer ID
+            paddle_customer_id = user.get("paddle_customer_id")
+            
+            if not paddle_customer_id:
+                # Create customer in Paddle
+                customer_email = user.get("email") or f"user_{str(user_uuid)[:8]}@jobscout.ai"
+                customer_response = await httpx.AsyncClient().post(
+                    f"{api_base}/customers",
+                    headers={
+                        "Authorization": f"Bearer {settings.paddle_api_key}",
+                        "Content-Type": "application/json",
+                        "Paddle-Version": "1",
+                    },
+                    json={
+                        "email": customer_email,
+                        "name": f"JobScout User {str(user_uuid)[:8]}",
+                    },
+                    timeout=10.0,
+                )
+                
+                if customer_response.status_code in [200, 201]:
+                    customer_data = customer_response.json()
+                    paddle_customer_id = customer_data.get("data", {}).get("id")
+                    
+                    # Store customer ID in database
+                    await apply_storage.update_user_plan(
+                        conn,
+                        user_id=user_uuid,
+                        paddle_customer_id=str(paddle_customer_id),
+                    )
+                else:
+                    # If customer creation fails, log and continue
+                    print(f"Failed to create Paddle customer: {customer_response.status_code} - {customer_response.text}")
+            
+            # Get product ID from settings (or use vendor_id as fallback)
+            # In Paddle, you need to create a product and get its ID
+            product_id = settings.paddle_product_id or settings.paddle_vendor_id
+            
+            if not product_id:
+                raise HTTPException(
+                    status_code=500,
+                    detail="Paddle product ID not configured. Set JOBSCOUT_PADDLE_PRODUCT_ID or JOBSCOUT_PADDLE_VENDOR_ID"
+                )
+            
+            # Generate checkout link using Paddle's transaction preview API
+            # This creates a checkout link for a subscription
+            checkout_data = {
+                "items": [
+                    {
+                        "price_id": product_id,  # This should be your subscription price_id from Paddle
+                        "quantity": 1,
+                    }
+                ],
+                "customer_id": paddle_customer_id,
+                "custom_data": {
+                    "user_id": str(user_uuid),
+                },
+            }
+            
+            # Use Paddle's transaction preview to get checkout URL
+            checkout_response = await httpx.AsyncClient().post(
+                f"{api_base}/transactions/preview",
+                headers={
+                    "Authorization": f"Bearer {settings.paddle_api_key}",
+                    "Content-Type": "application/json",
+                    "Paddle-Version": "1",
+                },
+                json=checkout_data,
+                timeout=10.0,
+            )
+            
+            if checkout_response.status_code in [200, 201]:
+                checkout_result = checkout_response.json()
+                # Paddle's response structure may vary - check for checkout URL
+                checkout_url = (
+                    checkout_result.get("data", {}).get("checkout", {}).get("url") or
+                    checkout_result.get("data", {}).get("url") or
+                    checkout_result.get("url")
+                )
+                
+                if checkout_url:
+                    return {
+                        "checkout_url": checkout_url,
+                        "message": "Redirect user to this URL to complete checkout",
+                    }
+            
+            # Fallback: Use Paddle's hosted checkout page
+            # This requires product_id to be set up in Paddle dashboard
+            base_url = "https://checkout.paddle.com" if settings.paddle_environment == "production" else "https://sandbox-checkout.paddle.com"
+            
+            # Build checkout URL with customer ID if available
+            checkout_params = {
+                "product": product_id,
+            }
+            if paddle_customer_id:
+                checkout_params["customer"] = paddle_customer_id
+            
+            from urllib.parse import urlencode
+            checkout_url = f"{base_url}/product/{product_id}?{urlencode(checkout_params)}"
+            
+            return {
+                "checkout_url": checkout_url,
+                "message": "Redirect user to this URL to complete checkout",
+            }
+            
+        except ImportError:
+            raise HTTPException(
+                status_code=500,
+                detail="httpx library not installed. Install with: pip install httpx"
+            )
+        except Exception as e:
+            # Log error for debugging
+            import traceback
+            print(f"Paddle checkout error: {e}")
+            print(traceback.format_exc())
+            
+            raise HTTPException(
+                status_code=500,
+                detail=f"Failed to generate checkout URL: {str(e)}"
+            )

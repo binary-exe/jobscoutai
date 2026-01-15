@@ -206,6 +206,7 @@ async def parse_job_url(url: str) -> Dict[str, Any]:
     # Try JSON-LD first
     job_data = extract_job_from_jsonld(html, url)
     if job_data:
+        job_data["html"] = html  # Include HTML in response
         return {
             "success": True,
             "error": None,
@@ -215,6 +216,7 @@ async def parse_job_url(url: str) -> Dict[str, Any]:
     
     # Fallback to HTML parsing
     job_data = extract_job_from_html(html, url)
+    job_data["html"] = html  # Include HTML in response
     return {
         "success": True,
         "error": None,

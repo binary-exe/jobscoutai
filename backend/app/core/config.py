@@ -46,6 +46,7 @@ class Settings(BaseSettings):
     paddle_api_key: Optional[str] = None
     paddle_public_key: Optional[str] = None
     paddle_webhook_secret: Optional[str] = None
+    paddle_product_id: Optional[str] = None  # Product/Price ID for Pro subscription
     paddle_environment: str = "sandbox"  # sandbox or production
 
     class Config:

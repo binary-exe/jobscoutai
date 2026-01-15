@@ -362,6 +362,30 @@ def analyze_staleness(
     }
 
 
+async def _test_apply_link(job_url: Optional[str]) -> str:
+    """
+    Test if apply link is valid by making HTTP request.
+    
+    Returns: "valid", "broken", or "missing"
+    """
+    if not job_url:
+        return "missing"
+    
+    try:
+        async with HttpFetcher(timeout_s=5, max_retries=1) as fetcher:
+            result = await fetcher.fetch(job_url, use_cache=False)
+            
+            if result.ok and result.status < 400:
+                return "valid"
+            elif result.status == 404:
+                return "broken"
+            else:
+                return "broken"
+    except Exception as e:
+        # Timeout, connection error, etc.
+        return "broken"
+
+
 async def generate_trust_report(
     job_target_id: str,
     job_url: Optional[str],
@@ -417,11 +441,8 @@ async def generate_trust_report(
         html=html,
     )
     
-    # Determine apply link status (simplified - would need actual HTTP check)
-    apply_link_status = "valid"
-    if not job_url:
-        apply_link_status = "missing"
-    # TODO: Actually test the link with HTTP request
+    # Test apply link status
+    apply_link_status = await _test_apply_link(job_url)
     
     return {
         "scam_risk": scam_analysis["risk"],

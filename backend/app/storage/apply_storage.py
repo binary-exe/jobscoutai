@@ -140,10 +140,15 @@ async def create_job_target(
     keywords: Optional[List[str]] = None,
     must_haves: Optional[List[str]] = None,
     role_rubric: Optional[str] = None,
+    html: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a new job target."""
     job_hash = hash_job_target(job_url, job_text)
     job_target_id = uuid4()
+    
+    # Limit HTML size to prevent database bloat (max 500KB)
+    if html and len(html) > 500000:
+        html = html[:500000] + "... [truncated]"
     
     row = await conn.fetchrow(
         """
@@ -151,15 +156,15 @@ async def create_job_target(
         (job_target_id, user_id, job_url, job_text, job_hash, extracted_json,
          title, company, location, remote_type, employment_type,
          salary_min, salary_max, salary_currency, description_text,
-         requirements, keywords, must_haves, role_rubric)
-        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)
+         requirements, keywords, must_haves, role_rubric, html)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)
         RETURNING *
         """,
         job_target_id, user_id, job_url, job_text, job_hash,
         json.dumps(extracted_json) if extracted_json else None,
         title, company, location, remote_type, employment_type,
         salary_min, salary_max, salary_currency, description_text,
-        requirements, keywords, must_haves, role_rubric,
+        requirements, keywords, must_haves, role_rubric, html,
     )
     return dict(row)
 

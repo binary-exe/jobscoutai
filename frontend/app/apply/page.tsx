@@ -4,7 +4,7 @@ import { useState } from 'react';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { FileText, Link as LinkIcon, Sparkles, CheckCircle2, AlertTriangle, Clock, Loader2, Edit2, Save, Shield, AlertCircle } from 'lucide-react';
-import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, type ParsedJob, type ApplyPack, type TrustReport } from '@/lib/apply-api';
+import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, uploadResume, type ParsedJob, type ApplyPack, type TrustReport } from '@/lib/apply-api';
 
 export default function ApplyWorkspacePage() {
   const [resumeText, setResumeText] = useState('');
@@ -19,6 +19,8 @@ export default function ApplyWorkspacePage() {
   const [trustReport, setTrustReport] = useState<TrustReport | null>(null);
   const [isGeneratingTrust, setIsGeneratingTrust] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [isUploading, setIsUploading] = useState(false);
+  const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
 
   const handleParseJob = async () => {
     if (!jobUrl.trim() && !jobText.trim()) {
@@ -78,6 +80,39 @@ export default function ApplyWorkspacePage() {
     } finally {
       setIsParsing(false);
     }
+  };
+
+  const handleFileUpload = async (file: File) => {
+    setIsUploading(true);
+    setError(null);
+    try {
+      const result = await uploadResume(file);
+      setResumeText(result.resume_text);
+      setUploadedFileName(result.filename);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to upload resume');
+    } finally {
+      setIsUploading(false);
+    }
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      handleFileUpload(file);
+    }
+  };
+
+  const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    const file = e.dataTransfer.files[0];
+    if (file) {
+      handleFileUpload(file);
+    }
+  };
+
+  const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
   };
 
   const handleGeneratePack = async () => {
@@ -143,10 +178,51 @@ export default function ApplyWorkspacePage() {
                     <label className="block text-sm font-medium mb-2">
                       Upload PDF/DOCX or paste text
                     </label>
+                    
+                    {/* File Upload Area */}
+                    <div
+                      onDrop={handleDrop}
+                      onDragOver={handleDragOver}
+                      className="mb-3 border-2 border-dashed border-border rounded-lg p-6 text-center hover:border-primary/50 transition-colors cursor-pointer"
+                    >
+                      <input
+                        type="file"
+                        accept=".pdf,.docx,.doc"
+                        onChange={handleFileChange}
+                        className="hidden"
+                        id="resume-upload"
+                        disabled={isUploading}
+                      />
+                      <label
+                        htmlFor="resume-upload"
+                        className="cursor-pointer"
+                      >
+                        {isUploading ? (
+                          <div className="flex flex-col items-center gap-2">
+                            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+                            <span className="text-sm text-muted-foreground">Uploading...</span>
+                          </div>
+                        ) : (
+                          <div className="flex flex-col items-center gap-2">
+                            <FileText className="h-8 w-8 text-muted-foreground" />
+                            <span className="text-sm font-medium">
+                              {uploadedFileName ? `Uploaded: ${uploadedFileName}` : 'Click to upload or drag and drop'}
+                            </span>
+                            <span className="text-xs text-muted-foreground">PDF or DOCX (max 10MB)</span>
+                          </div>
+                        )}
+                      </label>
+                    </div>
+                    
+                    <p className="text-xs text-muted-foreground mb-2 text-center">OR</p>
+                    
                     <textarea
                       value={resumeText}
-                      onChange={(e) => setResumeText(e.target.value)}
-                      placeholder="Paste your resume text here, or upload a file..."
+                      onChange={(e) => {
+                        setResumeText(e.target.value);
+                        setUploadedFileName(null);
+                      }}
+                      placeholder="Paste your resume text here..."
                       className="w-full min-h-[200px] rounded-lg border border-input bg-background px-3 py-2 text-sm"
                     />
                   </div>

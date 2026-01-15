@@ -56,6 +56,27 @@ export interface ParsedJob {
   extraction_method?: string;
 }
 
+export async function uploadResume(file: File): Promise<{ resume_text: string; filename: string; size: number }> {
+  const userId = getUserId();
+  const formData = new FormData();
+  formData.append('file', file);
+  
+  const response = await fetch(`${API_URL}/apply/resume/upload`, {
+    method: 'POST',
+    headers: {
+      'X-User-ID': userId,
+    },
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
+    throw new Error(error.detail || `HTTP ${response.status}`);
+  }
+
+  return response.json();
+}
+
 export async function parseJob(jobUrl?: string, jobText?: string): Promise<ParsedJob> {
   return apiRequest<ParsedJob>('/apply/job/parse', {
     method: 'POST',
