@@ -4,8 +4,11 @@ FastAPI application entry point.
 
 from contextlib import asynccontextmanager
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.exceptions import RequestValidationError
+from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import db
@@ -65,6 +68,52 @@ def create_app() -> FastAPI:
         allow_methods=["*"],
         allow_headers=["*"],
     )
+
+    # Exception handlers to ensure CORS headers are always sent
+    @app.exception_handler(StarletteHTTPException)
+    async def http_exception_handler(request: Request, exc: StarletteHTTPException):
+        """Ensure CORS headers are sent even on HTTP exceptions."""
+        response = JSONResponse(
+            status_code=exc.status_code,
+            content={"detail": exc.detail},
+        )
+        # Add CORS headers manually
+        origin = request.headers.get("origin")
+        if origin and origin in settings.cors_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
+
+    @app.exception_handler(RequestValidationError)
+    async def validation_exception_handler(request: Request, exc: RequestValidationError):
+        """Ensure CORS headers are sent even on validation errors."""
+        response = JSONResponse(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            content={"detail": exc.errors()},
+        )
+        # Add CORS headers manually
+        origin = request.headers.get("origin")
+        if origin and origin in settings.cors_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
+
+    @app.exception_handler(Exception)
+    async def general_exception_handler(request: Request, exc: Exception):
+        """Ensure CORS headers are sent even on unhandled exceptions."""
+        import traceback
+        print(f"Unhandled exception: {exc}")
+        print(traceback.format_exc())
+        response = JSONResponse(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            content={"detail": "Internal server error"},
+        )
+        # Add CORS headers manually
+        origin = request.headers.get("origin")
+        if origin and origin in settings.cors_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+        return response
 
     # Routes
     app.include_router(jobs.router, prefix=settings.api_prefix)
