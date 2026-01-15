@@ -150,6 +150,13 @@ async def parse_job(
         description_text = job_data.get("description_text") or request.job_text or ""
         job_analysis = await job_analyzer.analyze_job(description_text, use_ai=False)  # Use heuristic for now (faster)
         
+        # Convert employment_type list to string if needed
+        employment_type = job_data.get("employment_type")
+        if isinstance(employment_type, list):
+            employment_type = ", ".join(employment_type) if employment_type else None
+        elif employment_type is None:
+            employment_type = None
+        
         # Create job target with extracted data
         job_target = await apply_storage.create_job_target(
             conn,
@@ -161,7 +168,7 @@ async def parse_job(
             company=job_data.get("company"),
             location=job_data.get("location"),
             remote_type=job_data.get("remote_type"),
-            employment_type=job_data.get("employment_type"),
+            employment_type=employment_type,
             salary_min=job_data.get("salary_min"),
             salary_max=job_data.get("salary_max"),
             salary_currency=job_data.get("salary_currency"),
