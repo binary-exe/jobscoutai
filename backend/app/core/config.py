@@ -80,6 +80,14 @@ class Settings(BaseSettings):
     scrape_interval_hours: int = 6
     default_search_query: str = "automation engineer"
     default_location: str = "Remote"
+    
+    # Public scrape settings
+    public_scrape_enabled: bool = True
+    public_scrape_max_concurrent: int = 2
+    public_scrape_rate_limit_per_hour: int = 10
+    public_scrape_default_location: str = "Remote"
+    public_scrape_max_results_per_source: int = 100
+    public_scrape_concurrency: int = 8
 
     # AI settings
     openai_api_key: Optional[str] = None
