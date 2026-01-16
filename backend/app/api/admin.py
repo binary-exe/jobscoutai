@@ -83,18 +83,19 @@ async def trigger_run(
 ):
     """
     Trigger a scrape run. Requires admin token.
+    Returns immediately with run_id; scrape runs in background.
     """
-    from backend.app.worker import trigger_scrape_run
+    from backend.app.worker import enqueue_scrape_run
 
     try:
-        run_id = await trigger_scrape_run(
+        run_id = await enqueue_scrape_run(
             query=request.query or settings.default_search_query,
             location=request.location or settings.default_location,
             use_ai=request.use_ai and settings.ai_enabled,
         )
         return RunTriggerResponse(
             status="started",
-            message=f"Scrape run started",
+            message=f"Scrape run queued",
             run_id=run_id,
         )
     except Exception as e:
