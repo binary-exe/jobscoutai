@@ -75,7 +75,7 @@ class Settings(BaseSettings):
 
     @field_validator("scheduled_queries", mode="before")
     @classmethod
-    def parse_scheduled_queries(cls, v: Union[str, List[str], None]) -> List[str]:
+    def parse_scheduled_queries(cls, v: Any) -> List[str]:
         """Parse scheduled queries from JSON string or comma-separated list."""
         if v is None:
             return []
@@ -122,7 +122,7 @@ class Settings(BaseSettings):
 
     @field_validator("enabled_providers", mode="before")
     @classmethod
-    def parse_enabled_providers(cls, v: Union[str, List[str], None]) -> List[str]:
+    def parse_enabled_providers(cls, v: Any) -> List[str]:
         """Parse enabled providers from JSON string or comma-separated list."""
         if v is None:
             return []
@@ -144,6 +144,7 @@ class Settings(BaseSettings):
                 return [p.strip() for p in v.split(",") if p.strip()]
             # Single value
             return [v.strip()]
+        # Unexpected type - return empty list to use default
         return []
 
     # AI settings
