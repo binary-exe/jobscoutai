@@ -31,6 +31,13 @@ from jobscout.providers.lever import LeverProvider
 from jobscout.providers.ashby import AshbyProvider
 from jobscout.providers.recruitee import RecruiteeProvider
 from jobscout.providers.schemaorg import SchemaOrgProvider
+from jobscout.providers.workingnomads import WorkingNomadsProvider
+from jobscout.providers.remoteco import RemoteCoProvider
+from jobscout.providers.justremote import JustRemoteProvider
+from jobscout.providers.wellfound import WellfoundProvider
+from jobscout.providers.stackoverflow import StackOverflowProvider
+from jobscout.providers.indeed import IndeedProvider
+from jobscout.providers.flexjobs import FlexJobsProvider
 from jobscout.providers.base import Provider
 
 # Discovery (optional dependency)
@@ -286,6 +293,13 @@ async def run_scrape(
             providers.append(RemoteOKProvider())
             providers.append(ArbeitnowProvider())
             providers.append(WWRRssProvider())
+            providers.append(WorkingNomadsProvider())
+            providers.append(RemoteCoProvider())
+            providers.append(JustRemoteProvider())
+            providers.append(WellfoundProvider())
+            providers.append(StackOverflowProvider())
+            providers.append(IndeedProvider())
+            providers.append(FlexJobsProvider())
 
             # Discovered ATS providers
             if discovered["lever_sites"]:
