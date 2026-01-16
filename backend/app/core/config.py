@@ -73,6 +73,28 @@ class Settings(BaseSettings):
                 return [v.strip()]
         return ["http://localhost:3000", "https://jobscoutai.vercel.app"]
 
+    @field_validator("scheduled_queries", mode="before")
+    @classmethod
+    def parse_scheduled_queries(cls, v: Union[str, List[str]]) -> List[str]:
+        """Parse scheduled queries from JSON string or comma-separated list."""
+        if isinstance(v, list):
+            return [q for q in v if isinstance(q, str) and q.strip()]
+        if isinstance(v, str):
+            # Try JSON list first
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [q for q in parsed if isinstance(q, str) and q.strip()]
+            except (json.JSONDecodeError, TypeError):
+                pass
+            # Fallback: comma-separated
+            if "," in v:
+                return [q.strip() for q in v.split(",") if q.strip()]
+            # Single value
+            if v.strip():
+                return [v.strip()]
+        return []
+
     # Admin
     admin_token: str = ""  # Required for POST /admin/run
 
@@ -80,14 +102,41 @@ class Settings(BaseSettings):
     scrape_interval_hours: int = 6
     default_search_query: str = "automation engineer"
     default_location: str = "Remote"
+    scheduled_queries: List[str] = []
     
     # Public scrape settings
-    public_scrape_enabled: bool = True
+    public_scrape_enabled: bool = False
     public_scrape_max_concurrent: int = 2
     public_scrape_rate_limit_per_hour: int = 10
     public_scrape_default_location: str = "Remote"
     public_scrape_max_results_per_source: int = 100
     public_scrape_concurrency: int = 8
+    
+    # Enabled providers (optional allowlist). If empty => use all built-in providers.
+    # Default to stable sources: remotive, remoteok, arbeitnow, weworkremotely
+    enabled_providers: List[str] = ["remotive", "remoteok", "arbeitnow", "weworkremotely"]
+
+    @field_validator("enabled_providers", mode="before")
+    @classmethod
+    def parse_enabled_providers(cls, v: Union[str, List[str]]) -> List[str]:
+        """Parse enabled providers from JSON string or comma-separated list."""
+        if isinstance(v, list):
+            return [p for p in v if isinstance(p, str) and p.strip()]
+        if isinstance(v, str):
+            # Try JSON list first
+            try:
+                parsed = json.loads(v)
+                if isinstance(parsed, list):
+                    return [p for p in parsed if isinstance(p, str) and p.strip()]
+            except (json.JSONDecodeError, TypeError):
+                pass
+            # Fallback: comma-separated
+            if "," in v:
+                return [p.strip() for p in v.split(",") if p.strip()]
+            # Single value
+            if v.strip():
+                return [v.strip()]
+        return []
 
     # AI settings
     openai_api_key: Optional[str] = None

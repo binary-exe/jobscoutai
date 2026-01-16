@@ -80,7 +80,8 @@ async def scrape_now(
         run_id = await enqueue_scrape_run(
             query=body.query,
             location=body.location or settings.public_scrape_default_location,
-            use_ai=body.use_ai and settings.ai_enabled,
+            # Public scrapes are non-AI; AI is reserved for admin/scheduled runs.
+            use_ai=False,
             max_results_per_source=settings.public_scrape_max_results_per_source,
             concurrency=settings.public_scrape_concurrency,
         )

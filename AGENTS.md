@@ -405,10 +405,9 @@ jobscout/
 - `run_scheduled_scrape()`: Scheduled scrape runner
 
 #### `backend/app/api/scrape.py`
-- `POST /api/v1/scrape`: Public endpoint for on-demand scraping
-  - Rate limiting: 6 requests/hour per IP
-  - Concurrency cap: 1 active scrape
-  - Returns `{status: "queued", run_id: N}` immediately
+- `POST /api/v1/scrape`: Public endpoint (disabled by default in production)
+  - Returns 404 when `JOBSCOUT_PUBLIC_SCRAPE_ENABLED=false`
+  - Use `POST /api/v1/admin/run` for manual scraping
 
 #### `backend/app/api/runs.py`
 - `GET /api/v1/runs/{run_id}`: Get run status and stats
@@ -682,6 +681,8 @@ JOBSCOUT_ADMIN_TOKEN=your-long-random-token-here
 JOBSCOUT_DEFAULT_SEARCH_QUERY=automation engineer
 JOBSCOUT_DEFAULT_LOCATION=Remote
 JOBSCOUT_SCRAPE_INTERVAL_HOURS=6
+JOBSCOUT_SCHEDULED_QUERIES='["automation engineer","data engineer"]'  # Optional: multiple queries for scheduled scrapes
+JOBSCOUT_ENABLED_PROVIDERS=remotive,remoteok,arbeitnow,weworkremotely  # Optional: provider allowlist (defaults to stable sources)
 
 # AI (optional)
 JOBSCOUT_OPENAI_API_KEY=sk-...
@@ -690,7 +691,7 @@ JOBSCOUT_AI_ENABLED=false
 JOBSCOUT_AI_MAX_JOBS=50
 
 # Public scrape guardrails
-JOBSCOUT_PUBLIC_SCRAPE_ENABLED=true
+JOBSCOUT_PUBLIC_SCRAPE_ENABLED=false
 JOBSCOUT_PUBLIC_SCRAPE_MAX_CONCURRENT=1
 JOBSCOUT_PUBLIC_SCRAPE_RATE_LIMIT_PER_HOUR=6
 JOBSCOUT_PUBLIC_SCRAPE_MAX_RESULTS_PER_SOURCE=200

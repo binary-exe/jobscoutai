@@ -11,6 +11,12 @@ export const metadata: Metadata = {
   title: 'JobScout - Find Your Perfect Remote Job',
   description: 'AI-powered job aggregator for remote work opportunities. Find automation, engineering, and tech jobs from top companies.',
   keywords: ['remote jobs', 'automation engineer', 'job search', 'tech jobs', 'AI jobs'],
+  icons: {
+    icon: [
+      { url: '/favicon.ico' },
+      { url: '/icon.svg', type: 'image/svg+xml' },
+    ],
+  },
   openGraph: {
     title: 'JobScout - Find Your Perfect Remote Job',
     description: 'AI-powered job aggregator for remote work opportunities.',

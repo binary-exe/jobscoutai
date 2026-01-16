@@ -38,7 +38,7 @@ ai = [
     "openai>=1.0",
 ]
 discovery = [
-    "duckduckgo_search>=4.0",
+    "ddgs>=6.0",
 ]
 all = [
     "jobscout[browser,ai,discovery]",

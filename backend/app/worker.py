@@ -170,6 +170,7 @@ async def trigger_scrape_run(
         verbose=True,
         use_ai=use_ai and settings.ai_enabled,
         ai_config=ai_config,
+        enabled_providers=settings.enabled_providers if settings.enabled_providers else None,
     )
 
     # If using Postgres, sync from temp SQLite to Postgres
@@ -200,17 +201,19 @@ async def _sync_to_postgres(sqlite_path: str) -> None:
 async def run_scheduled_scrape():
     """Run scheduled scrape with default settings."""
     settings = get_settings()
-    print(f"[Scheduler] Starting scheduled scrape: {settings.default_search_query}")
+    queries = settings.scheduled_queries or [settings.default_search_query]
+    print(f"[Scheduler] Starting scheduled scrape for {len(queries)} query(ies)")
 
     try:
-        # Queue as a tracked run (writes to Postgres runs table in production).
-        run_id = await enqueue_scrape_run(
-            query=settings.default_search_query,
-            location=settings.default_location,
-            use_ai=settings.ai_enabled,
-            max_results_per_source=settings.public_scrape_max_results_per_source,
-            concurrency=settings.public_scrape_concurrency,
-        )
-        print(f"[Scheduler] Scrape queued (run_id={run_id})")
+        for query in queries:
+            # Queue as a tracked run (writes to Postgres runs table in production).
+            run_id = await enqueue_scrape_run(
+                query=query,
+                location=settings.default_location,
+                use_ai=False,
+                max_results_per_source=settings.public_scrape_max_results_per_source,
+                concurrency=settings.public_scrape_concurrency,
+            )
+            print(f"[Scheduler] Scrape queued: \"{query}\" (run_id={run_id})")
     except Exception as e:
         print(f"[Scheduler] Scrape failed: {e}")

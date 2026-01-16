@@ -60,12 +60,19 @@ async def _collect_from_provider(
     provider: Provider,
     fetcher: HttpFetcher,
     criteria: Criteria,
+    log_fn=None,
 ) -> Tuple[str, List[NormalizedJob], int]:
     """Collect jobs from a single provider, returning (name, jobs, errors)."""
+    log = log_fn or (lambda x: None)
     try:
         jobs = await provider.collect(fetcher, criteria)
-        return provider.name, jobs, provider.stats.errors
+        errors = provider.stats.errors
+        if errors > 0 and provider.stats.error_messages:
+            log(f"    {provider.name} errors: {'; '.join(provider.stats.error_messages[:3])}")
+        return provider.name, jobs, errors
     except Exception as e:
+        error_msg = str(e)[:100] if str(e) else type(e).__name__
+        log(f"    {provider.name} failed: {error_msg}")
         return provider.name, [], 1
 
 
@@ -211,6 +218,7 @@ async def run_scrape(
     verbose: bool = False,
     use_ai: bool = False,
     ai_config: Optional[dict] = None,
+    enabled_providers: Optional[List[str]] = None,
 ) -> RunStats:
     """
     Run a complete job scraping session.
@@ -287,19 +295,33 @@ async def run_scrape(
 
             # ===================== Build Provider List =====================
             providers: List[Provider] = []
+            
+            # Provider registry mapping names to classes
+            provider_registry: dict[str, type] = {
+                "remotive": RemotiveProvider,
+                "remoteok": RemoteOKProvider,
+                "arbeitnow": ArbeitnowProvider,
+                "weworkremotely": WWRRssProvider,
+                "workingnomads": WorkingNomadsProvider,
+                "remoteco": RemoteCoProvider,
+                "justremote": JustRemoteProvider,
+                "wellfound": WellfoundProvider,
+                "stackoverflow": StackOverflowProvider,
+                "indeed": IndeedProvider,
+                "flexjobs": FlexJobsProvider,
+            }
 
-            # Always-on providers (public APIs/feeds)
-            providers.append(RemotiveProvider())
-            providers.append(RemoteOKProvider())
-            providers.append(ArbeitnowProvider())
-            providers.append(WWRRssProvider())
-            providers.append(WorkingNomadsProvider())
-            providers.append(RemoteCoProvider())
-            providers.append(JustRemoteProvider())
-            providers.append(WellfoundProvider())
-            providers.append(StackOverflowProvider())
-            providers.append(IndeedProvider())
-            providers.append(FlexJobsProvider())
+            # Filter providers if allowlist is specified
+            if enabled_providers:
+                enabled_set = {p.lower().strip() for p in enabled_providers}
+                log(f"Provider allowlist: {', '.join(sorted(enabled_set))}")
+                for name, provider_class in provider_registry.items():
+                    if name in enabled_set:
+                        providers.append(provider_class())
+            else:
+                # Use all built-in providers if no allowlist
+                for provider_class in provider_registry.values():
+                    providers.append(provider_class())
 
             # Discovered ATS providers
             if discovered["lever_sites"]:
@@ -329,7 +351,7 @@ async def run_scrape(
 
             async def collect_bounded(p: Provider) -> Tuple[str, List[NormalizedJob], int]:
                 async with semaphore:
-                    return await _collect_from_provider(p, fetcher, criteria)
+                    return await _collect_from_provider(p, fetcher, criteria, log_fn=log)
 
             tasks = [collect_bounded(p) for p in providers]
             results = await asyncio.gather(*tasks)
@@ -432,9 +454,11 @@ async def run_scrape(
     # Finalize run stats
     stats.errors = total_errors
     stats.sources = ", ".join(sources_used)
+    # Get job count before closing DB
+    total_jobs = db.get_job_count() if db._conn else None
     db.finish_run(run_id, stats)
     db.close()
 
-    log(f"Run complete. Total jobs in DB: {db.get_job_count() if db._conn else 'N/A'}")
+    log(f"Run complete. Total jobs in DB: {total_jobs if total_jobs is not None else 'N/A'}")
 
     return stats

@@ -11,18 +11,29 @@ Uses DuckDuckGo search to discover:
 from __future__ import annotations
 
 import re
+import warnings
 from typing import List, Set, Tuple
 
 from jobscout.models import Criteria, normalize_text, canonicalize_url
 
 
-# Try to import duckduckgo_search
+# Prefer the renamed package (ddgs), fallback to duckduckgo_search.
 try:
-    from duckduckgo_search import DDGS
+    from ddgs import DDGS
     HAS_DDGS = True
 except ImportError:
-    DDGS = None  # type: ignore
-    HAS_DDGS = False
+    try:
+        # Silence the deprecation warning emitted by duckduckgo_search.
+        warnings.filterwarnings(
+            "ignore",
+            message=r".*duckduckgo_search.*renamed.*ddgs.*",
+            category=RuntimeWarning,
+        )
+        from duckduckgo_search import DDGS  # type: ignore
+        HAS_DDGS = True
+    except ImportError:
+        DDGS = None  # type: ignore
+        HAS_DDGS = False
 
 
 # ATS URL patterns
