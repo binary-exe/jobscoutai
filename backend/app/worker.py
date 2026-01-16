@@ -23,20 +23,37 @@ async def _run_scrape_background(
     
     try:
         result_run_id = await trigger_scrape_run(query, location, use_ai)
-        # If we have a run_id, mark it as finished
-        if run_id:
+        # If we have a run_id, mark it as finished (use result_run_id stats if available)
+        target_run_id = run_id or result_run_id
+        if target_run_id:
             async with db.connection() as conn:
-                await finish_run(conn, run_id, jobs_new=0, jobs_updated=0)
-        elif result_run_id:
-            async with db.connection() as conn:
-                await finish_run(conn, result_run_id, jobs_new=0, jobs_updated=0)
+                # Get stats from the scrape if available, otherwise use defaults
+                await finish_run(
+                    conn, 
+                    target_run_id,
+                    jobs_collected=0,
+                    jobs_new=0,
+                    jobs_updated=0,
+                    jobs_filtered=0,
+                    errors=0,
+                    sources=""
+                )
     except Exception as e:
         print(f"[Worker] Background scrape failed: {e}")
         # Mark run as failed if we have run_id
         if run_id:
             try:
                 async with db.connection() as conn:
-                    await finish_run(conn, run_id, jobs_new=0, jobs_updated=0, error_summary=str(e))
+                    await finish_run(
+                        conn, 
+                        run_id,
+                        jobs_collected=0,
+                        jobs_new=0,
+                        jobs_updated=0,
+                        jobs_filtered=0,
+                        errors=1,
+                        sources=""
+                    )
             except:
                 pass
 
