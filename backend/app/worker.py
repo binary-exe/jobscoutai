@@ -16,27 +16,34 @@ async def _run_scrape_background(
     location: str = "Remote",
     use_ai: bool = False,
     run_id: Optional[int] = None,
+    max_results_per_source: int = 100,
+    concurrency: int = 8,
 ) -> None:
     """Run scrape in background (internal function)."""
     from backend.app.core.database import db
     from backend.app.storage.postgres import finish_run
+    from jobscout.storage.sqlite import RunStats
     
     try:
-        result_run_id = await trigger_scrape_run(query, location, use_ai)
-        # If we have a run_id, mark it as finished (use result_run_id stats if available)
-        target_run_id = run_id or result_run_id
-        if target_run_id:
+        stats: RunStats = await trigger_scrape_run(
+            query=query,
+            location=location,
+            use_ai=use_ai,
+            max_results_per_source=max_results_per_source,
+            concurrency=concurrency,
+            run_id=run_id,
+        )
+        if run_id:
             async with db.connection() as conn:
-                # Get stats from the scrape if available, otherwise use defaults
                 await finish_run(
                     conn, 
-                    target_run_id,
-                    jobs_collected=0,
-                    jobs_new=0,
-                    jobs_updated=0,
-                    jobs_filtered=0,
-                    errors=0,
-                    sources=""
+                    run_id,
+                    jobs_collected=stats.jobs_collected,
+                    jobs_new=stats.jobs_new,
+                    jobs_updated=stats.jobs_updated,
+                    jobs_filtered=stats.jobs_filtered,
+                    errors=stats.errors,
+                    sources=stats.sources or "",
                 )
     except Exception as e:
         print(f"[Worker] Background scrape failed: {e}")
@@ -55,6 +62,14 @@ async def _run_scrape_background(
                         sources=""
                     )
             except:
+                pass
+    finally:
+        # Release in-flight slot (best-effort). Import inside function to avoid import-time cycles.
+        if run_id is not None:
+            try:
+                from backend.app.api.scrape import mark_run_finished
+                await mark_run_finished(run_id)
+            except Exception:
                 pass
 
 
@@ -87,7 +102,16 @@ async def enqueue_scrape_run(
         run_id = await start_run(conn, json.dumps(criteria_dict))
     
     # Run scrape in background
-    asyncio.create_task(_run_scrape_background(query, location, use_ai, run_id))
+    asyncio.create_task(
+        _run_scrape_background(
+            query=query,
+            location=location,
+            use_ai=use_ai,
+            run_id=run_id,
+            max_results_per_source=max_results_per_source,
+            concurrency=concurrency,
+        )
+    )
     
     return run_id
 
@@ -96,33 +120,39 @@ async def trigger_scrape_run(
     query: str,
     location: str = "Remote",
     use_ai: bool = False,
-) -> Optional[int]:
+    max_results_per_source: int = 100,
+    concurrency: int = 8,
+    run_id: Optional[int] = None,
+):
     """
     Trigger a scrape run using the core jobscout orchestrator.
 
-    Returns the run_id.
+    Returns RunStats from the core scraper.
     """
     settings = get_settings()
 
     # Import here to avoid circular imports
     from jobscout.models import Criteria
     from jobscout.orchestrator import run_scrape
+    from jobscout.storage.sqlite import RunStats
 
     criteria = Criteria(
         primary_query=query,
         location=location,
         remote_only=True,
-        max_results_per_source=100,
+        max_results_per_source=max_results_per_source,
         enrich_company_pages=True,
-        concurrency=8,
+        concurrency=concurrency,
     )
 
     # Determine storage path
     if settings.use_sqlite:
         db_path = settings.sqlite_path
     else:
-        # For Postgres, we'll still use SQLite for the run and then sync
-        db_path = "temp_scrape.db"
+        # For Postgres, we still use SQLite as a staging DB and then sync to Postgres.
+        # Use a per-run path to avoid collisions when multiple scrapes overlap.
+        suffix = run_id if run_id is not None else "adhoc"
+        db_path = f"temp_scrape_{suffix}.db"
 
     ai_config = None
     if use_ai and settings.ai_enabled and settings.openai_api_key:
@@ -132,7 +162,7 @@ async def trigger_scrape_run(
             "max_jobs": settings.ai_max_jobs,
         }
 
-    stats = await run_scrape(
+    stats: RunStats = await run_scrape(
         criteria=criteria,
         db_path=db_path,
         csv_path=None,
@@ -147,7 +177,7 @@ async def trigger_scrape_run(
         await _sync_to_postgres(db_path)
         os.remove(db_path)
 
-    return stats.run_id if hasattr(stats, 'run_id') else None
+    return stats
 
 
 async def _sync_to_postgres(sqlite_path: str) -> None:
@@ -173,11 +203,14 @@ async def run_scheduled_scrape():
     print(f"[Scheduler] Starting scheduled scrape: {settings.default_search_query}")
 
     try:
-        await trigger_scrape_run(
+        # Queue as a tracked run (writes to Postgres runs table in production).
+        run_id = await enqueue_scrape_run(
             query=settings.default_search_query,
             location=settings.default_location,
             use_ai=settings.ai_enabled,
+            max_results_per_source=settings.public_scrape_max_results_per_source,
+            concurrency=settings.public_scrape_concurrency,
         )
-        print("[Scheduler] Scrape completed successfully")
+        print(f"[Scheduler] Scrape queued (run_id={run_id})")
     except Exception as e:
         print(f"[Scheduler] Scrape failed: {e}")
