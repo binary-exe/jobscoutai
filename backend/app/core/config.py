@@ -75,11 +75,16 @@ class Settings(BaseSettings):
 
     @field_validator("scheduled_queries", mode="before")
     @classmethod
-    def parse_scheduled_queries(cls, v: Union[str, List[str]]) -> List[str]:
+    def parse_scheduled_queries(cls, v: Union[str, List[str], None]) -> List[str]:
         """Parse scheduled queries from JSON string or comma-separated list."""
+        if v is None:
+            return []
         if isinstance(v, list):
             return [q for q in v if isinstance(q, str) and q.strip()]
         if isinstance(v, str):
+            # Empty string
+            if not v.strip():
+                return []
             # Try JSON list first
             try:
                 parsed = json.loads(v)
@@ -91,8 +96,7 @@ class Settings(BaseSettings):
             if "," in v:
                 return [q.strip() for q in v.split(",") if q.strip()]
             # Single value
-            if v.strip():
-                return [v.strip()]
+            return [v.strip()]
         return []
 
     # Admin
@@ -118,11 +122,16 @@ class Settings(BaseSettings):
 
     @field_validator("enabled_providers", mode="before")
     @classmethod
-    def parse_enabled_providers(cls, v: Union[str, List[str]]) -> List[str]:
+    def parse_enabled_providers(cls, v: Union[str, List[str], None]) -> List[str]:
         """Parse enabled providers from JSON string or comma-separated list."""
+        if v is None:
+            return []
         if isinstance(v, list):
             return [p for p in v if isinstance(p, str) and p.strip()]
         if isinstance(v, str):
+            # Empty string
+            if not v.strip():
+                return []
             # Try JSON list first
             try:
                 parsed = json.loads(v)
@@ -134,8 +143,7 @@ class Settings(BaseSettings):
             if "," in v:
                 return [p.strip() for p in v.split(",") if p.strip()]
             # Single value
-            if v.strip():
-                return [v.strip()]
+            return [v.strip()]
         return []
 
     # AI settings
