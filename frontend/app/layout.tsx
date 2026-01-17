@@ -7,7 +7,10 @@ const inter = Inter({
   variable: '--font-inter',
 })
 
+const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
+
 export const metadata: Metadata = {
+  metadataBase: new URL(siteUrl),
   title: 'JobScout - Find Your Perfect Remote Job',
   description: 'AI-powered job aggregator for remote work opportunities. Find automation, engineering, and tech jobs from top companies.',
   keywords: ['remote jobs', 'automation engineer', 'job search', 'tech jobs', 'AI jobs'],
