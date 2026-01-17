@@ -87,6 +87,51 @@ export async function parseJob(jobUrl?: string, jobText?: string): Promise<Parse
   });
 }
 
+export async function importJobFromJobScout(job: {
+  job_id?: string;
+  job_url?: string;
+  apply_url?: string;
+  title: string;
+  company: string;
+  location_raw?: string;
+  remote_type?: string;
+  employment_types?: string[];
+  salary_min?: number;
+  salary_max?: number;
+  salary_currency?: string;
+  description_text?: string;
+  company_website?: string;
+  linkedin_url?: string;
+  ai_company_summary?: string;
+  ai_summary?: string;
+  ai_requirements?: string;
+  ai_tech_stack?: string;
+}): Promise<ParsedJob> {
+  return apiRequest<ParsedJob>('/apply/job/import', {
+    method: 'POST',
+    body: JSON.stringify({
+      job_id: job.job_id,
+      job_url: job.job_url,
+      apply_url: job.apply_url,
+      title: job.title,
+      company: job.company,
+      location_raw: job.location_raw,
+      remote_type: job.remote_type,
+      employment_types: job.employment_types,
+      salary_min: job.salary_min,
+      salary_max: job.salary_max,
+      salary_currency: job.salary_currency,
+      description_text: job.description_text,
+      company_website: job.company_website,
+      linkedin_url: job.linkedin_url,
+      ai_company_summary: job.ai_company_summary,
+      ai_summary: job.ai_summary,
+      ai_requirements: job.ai_requirements,
+      ai_tech_stack: job.ai_tech_stack,
+    }),
+  });
+}
+
 export async function updateJobTarget(
   jobTargetId: string,
   updates: Partial<ParsedJob>

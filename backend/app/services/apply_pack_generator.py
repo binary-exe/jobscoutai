@@ -16,6 +16,10 @@ async def generate_apply_pack(
     job_description: str,
     job_analysis: Dict[str, Any],
     use_ai: bool = True,
+    job_title: Optional[str] = None,
+    company_name: Optional[str] = None,
+    company_summary: Optional[str] = None,
+    company_website: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Generate tailored apply pack content.
@@ -35,12 +39,12 @@ async def generate_apply_pack(
     """
     if not use_ai:
         # Basic template-based generation
-        return _generate_basic_pack(resume_analysis, job_analysis)
+        return _generate_basic_pack(resume_analysis, job_analysis, job_title=job_title, company_name=company_name)
     
     # Use AI for generation
     settings = get_settings()
     if not settings.openai_api_key:
-        return _generate_basic_pack(resume_analysis, job_analysis)
+        return _generate_basic_pack(resume_analysis, job_analysis, job_title=job_title, company_name=company_name)
     
     try:
         from jobscout.llm.provider import LLMConfig, get_llm_client
@@ -63,7 +67,15 @@ async def generate_apply_pack(
         bullets = await _generate_bullets(client, resume_analysis, job_analysis)
         
         # Generate cover note
-        cover_note = await _generate_cover_note(client, resume_analysis, job_analysis)
+        cover_note = await _generate_cover_note(
+            client, 
+            resume_analysis, 
+            job_analysis,
+            job_title=job_title,
+            company_name=company_name,
+            company_summary=company_summary,
+            company_website=company_website,
+        )
         
         # Calculate ATS checklist
         ats_checklist = _calculate_ats_checklist(resume_analysis, job_analysis)
@@ -170,29 +182,70 @@ async def _generate_cover_note(
     client,
     resume_analysis: Dict,
     job_analysis: Dict,
+    job_title: Optional[str] = None,
+    company_name: Optional[str] = None,
+    company_summary: Optional[str] = None,
+    company_website: Optional[str] = None,
 ) -> str:
-    """Generate short cover note."""
-    system_prompt = """You are a career coach. Write brief, professional cover notes."""
+    """Generate hyper-personalized cover letter."""
+    system_prompt = """You are a professional career coach and cover letter writer. Write compelling, personalized cover letters that demonstrate genuine interest and alignment with the company's values and the role's requirements."""
     
-    prompt = f"""Write a 2-3 sentence cover note for this job application.
+    # Build company context
+    company_context = ""
+    if company_name:
+        company_context += f"Company: {company_name}\n"
+    if company_website:
+        company_context += f"Website: {company_website}\n"
+    if company_summary:
+        company_context += f"Company Overview: {company_summary[:300]}\n"
+    
+    # Get top resume achievements
+    top_bullets = resume_analysis.get('bullets', [])[:3]
+    achievements_text = "\n".join([f"- {b.get('text', '')}" for b in top_bullets])
+    
+    # Build job requirements context
+    must_haves = job_analysis.get('must_haves', [])[:5]
+    keywords = job_analysis.get('keywords', [])[:10]
+    rubric = job_analysis.get('rubric', '')
+    
+    prompt = f"""Write a professional, hyper-personalized cover letter (3-5 short paragraphs) for this job application.
 
-Resume highlights:
-- Skills: {', '.join(resume_analysis.get('skills', [])[:8])}
-- Seniority: {resume_analysis.get('seniority', 'mid')}
+JOB DETAILS:
+- Position: {job_title or 'This role'}
+- Company: {company_name or 'Your organization'}
+{company_context}
+- Key Requirements: {', '.join(must_haves) if must_haves else 'See job description'}
+- Important Keywords: {', '.join(keywords) if keywords else 'N/A'}
+- Role Expectations: {rubric[:300] if rubric else 'See job description'}
 
-Job focus: {job_analysis.get('rubric', '')[:200]}
+MY BACKGROUND:
+- Skills: {', '.join(resume_analysis.get('skills', [])[:10])}
+- Seniority Level: {resume_analysis.get('seniority', 'mid')}
+- Top Achievements:
+{achievements_text if achievements_text else '- See resume for details'}
 
-Write a brief note that:
-1. Expresses interest
-2. Highlights 1-2 most relevant skills/experiences
-3. Is concise and professional
+JOB DESCRIPTION SUMMARY:
+{job_analysis.get('rubric', job_description[:500] if 'job_description' in locals() else 'See full job description')}
 
-Cover note:"""
+Write a cover letter that:
+1. Opens with genuine interest in the specific role and company (reference company values/culture if available)
+2. Demonstrates alignment with role expectations by highlighting 2-3 most relevant achievements from my background
+3. Shows understanding of key requirements and how my experience addresses them
+4. Closes with enthusiasm and a clear call to action
+
+Make it specific, authentic, and tailored - avoid generic phrases. Use the company name and role title naturally throughout.
+
+Cover letter:"""
     
     response = await client.complete(prompt, system_prompt=system_prompt)
     if response.ok:
         return response.content.strip()
-    return "I am excited to apply for this position and believe my experience aligns well with your requirements."
+    # Fallback to basic template
+    fallback = f"I am writing to express my strong interest in the {job_title or 'position'} at {company_name or 'your organization'}."
+    if top_bullets:
+        fallback += f" With my experience in {', '.join(resume_analysis.get('skills', [])[:3])} and proven track record including {top_bullets[0].get('text', '')[:100]}..., I am confident I can contribute to your team's success."
+    fallback += " I am excited about the opportunity to discuss how my background aligns with your requirements."
+    return fallback
 
 
 def _calculate_ats_checklist(
@@ -224,6 +277,8 @@ def _calculate_ats_checklist(
 def _generate_basic_pack(
     resume_analysis: Dict,
     job_analysis: Dict,
+    job_title: Optional[str] = None,
+    company_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate basic pack without AI."""
     skills = resume_analysis.get('skills', [])[:10]
@@ -236,7 +291,13 @@ def _generate_basic_pack(
         for b in bullets
     ]
     
-    cover_note = f"I am interested in this position and believe my experience with {', '.join(skills[:3])} aligns with your requirements."
+    # Basic cover note fallback (still personalized if job_title/company available)
+    cover_note = f"I am writing to express my interest in this position"
+    if job_title:
+        cover_note += f" as {job_title}"
+    if company_name:
+        cover_note += f" at {company_name}"
+    cover_note += f". With my experience in {', '.join(skills[:3])}, I believe I can contribute effectively to your team."
     
     ats_checklist = _calculate_ats_checklist(resume_analysis, job_analysis)
     

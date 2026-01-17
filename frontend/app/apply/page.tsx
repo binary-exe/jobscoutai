@@ -1,12 +1,38 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
+import { useSearchParams } from 'next/navigation';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { FileText, Link as LinkIcon, Sparkles, CheckCircle2, AlertTriangle, Clock, Loader2, Edit2, Save, Shield, AlertCircle } from 'lucide-react';
-import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, uploadResume, type ParsedJob, type ApplyPack, type TrustReport } from '@/lib/apply-api';
+import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, uploadResume, importJobFromJobScout, type ParsedJob, type ApplyPack, type TrustReport } from '@/lib/apply-api';
+import type { JobDetail } from '@/lib/api';
+
+// #region agent log
+const agentLog = (
+  message: string,
+  data: Record<string, unknown> = {},
+  hypothesisId: string = 'H_UI_FLOW',
+  runId: string = 'pre-fix'
+) => {
+  fetch('http://127.0.0.1:7242/ingest/de514c6d-c2f9-42e3-8e05-845dd72b3ef2', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      sessionId: 'debug-session',
+      runId,
+      hypothesisId,
+      location: 'frontend/app/apply/page.tsx',
+      message,
+      data,
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+};
+// #endregion agent log
 
 export default function ApplyWorkspacePage() {
+  const searchParams = useSearchParams();
   const [resumeText, setResumeText] = useState('');
   const [jobUrl, setJobUrl] = useState('');
   const [jobText, setJobText] = useState('');
@@ -21,6 +47,87 @@ export default function ApplyWorkspacePage() {
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
+  const [isImporting, setIsImporting] = useState(false);
+
+  // Auto-import job from JobScout if jobId is in query params
+  useEffect(() => {
+    const jobId = searchParams?.get('jobId');
+    if (jobId && !parsedJob && !isImporting) {
+      // #region agent log
+      agentLog('auto_import:detected_jobId', { jobId }, 'H4_AUTO_IMPORT');
+      // #endregion agent log
+      handleImportFromJobScout(jobId);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [searchParams, parsedJob, isImporting]);
+
+  const handleImportFromJobScout = async (jobId: string) => {
+    setIsImporting(true);
+    setError(null);
+    try {
+      // Fetch job details from JobScout API (client-side)
+      const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
+      const res = await fetch(`${API_URL}/jobs/${jobId}`);
+      if (!res.ok) {
+        throw new Error('Job not found');
+      }
+      const job: JobDetail = await res.json();
+      
+      // Import into Apply Workspace
+      const result = await importJobFromJobScout({
+        job_id: job.job_id,
+        job_url: job.job_url,
+        apply_url: job.apply_url,
+        title: job.title,
+        company: job.company,
+        location_raw: job.location_raw,
+        remote_type: job.remote_type,
+        employment_types: job.employment_types,
+        salary_min: job.salary_min,
+        salary_max: job.salary_max,
+        salary_currency: job.salary_currency,
+        description_text: job.description_text,
+        company_website: job.company_website,
+        linkedin_url: job.linkedin_url,
+        ai_company_summary: job.ai_company_summary,
+        ai_summary: job.ai_summary,
+        ai_requirements: job.ai_requirements,
+        ai_tech_stack: job.ai_tech_stack,
+      });
+
+      // #region agent log
+      agentLog('auto_import:imported_job_target', { jobTargetId: result.job_target_id }, 'H4_AUTO_IMPORT');
+      // #endregion agent log
+      
+      setParsedJob(result);
+      setEditedJob({
+        title: result.title,
+        company: result.company,
+        location: result.location,
+        remote_type: result.remote_type,
+        employment_type: result.employment_type,
+        salary_min: result.salary_min,
+        salary_max: result.salary_max,
+        salary_currency: result.salary_currency,
+        description_text: result.description_text,
+      });
+      
+      // Pre-fill job URL and text fields
+      if (result.job_url) {
+        setJobUrl(result.job_url);
+      }
+      if (result.description_text) {
+        setJobText(result.description_text);
+      }
+      
+      // Automatically generate trust report
+      handleGenerateTrustReport(result.job_target_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to import job from JobScout');
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   const handleParseJob = async () => {
     if (!jobUrl.trim() && !jobText.trim()) {
@@ -590,17 +697,75 @@ export default function ApplyWorkspacePage() {
                   )}
                   
                   {/* Actions */}
-                  <div className="mt-4 pt-4 border-t border-border flex gap-2">
+                  <div className="mt-4 pt-4 border-t border-border flex flex-wrap gap-2">
                     <button
                       onClick={() => {
                         if (applyPack.tailored_summary) {
                           navigator.clipboard.writeText(applyPack.tailored_summary);
                         }
                       }}
-                      className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-muted"
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-muted"
                     >
                       Copy Summary
                     </button>
+                    {applyPack.cover_note && (
+                      <button
+                        onClick={() => {
+                          navigator.clipboard.writeText(applyPack.cover_note || '');
+                        }}
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-muted"
+                      >
+                        Copy Cover Letter
+                      </button>
+                    )}
+                    <button
+                      onClick={async () => {
+                        if (parsedJob) {
+                          try {
+                            const { exportApplyPackDocx } = await import('@/lib/apply-api');
+                            const blob = await exportApplyPackDocx(applyPack.apply_pack_id, 'resume');
+                            const url = window.URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = 'tailored_resume.docx';
+                            document.body.appendChild(a);
+                            a.click();
+                            window.URL.revokeObjectURL(url);
+                            document.body.removeChild(a);
+                          } catch (err) {
+                            alert(err instanceof Error ? err.message : 'DOCX export requires paid plan');
+                          }
+                        }
+                      }}
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-muted"
+                    >
+                      Download Resume DOCX
+                    </button>
+                    {applyPack.cover_note && (
+                      <button
+                        onClick={async () => {
+                          if (parsedJob) {
+                            try {
+                              const { exportApplyPackDocx } = await import('@/lib/apply-api');
+                              const blob = await exportApplyPackDocx(applyPack.apply_pack_id, 'cover');
+                              const url = window.URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = 'cover_letter.docx';
+                              document.body.appendChild(a);
+                              a.click();
+                              window.URL.revokeObjectURL(url);
+                              document.body.removeChild(a);
+                            } catch (err) {
+                              alert(err instanceof Error ? err.message : 'DOCX export requires paid plan');
+                            }
+                          }
+                        }}
+                        className="rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-muted"
+                      >
+                        Download Cover Letter DOCX
+                      </button>
+                    )}
                     <button
                       onClick={async () => {
                         if (parsedJob) {
@@ -620,9 +785,9 @@ export default function ApplyWorkspacePage() {
                           }
                         }
                       }}
-                      className="flex-1 rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-muted"
+                      className="rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-muted"
                     >
-                      Download DOCX
+                      Download Combined DOCX
                     </button>
                   </div>
                 </div>

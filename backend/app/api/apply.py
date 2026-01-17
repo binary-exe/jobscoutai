@@ -7,6 +7,8 @@ Handles job parsing, trust reports, resume processing, and apply pack generation
 from datetime import datetime
 from typing import Optional
 from uuid import UUID
+import json
+import time
 
 from fastapi import APIRouter, HTTPException, Depends, Header, Response, UploadFile, File, Form
 from fastapi.responses import StreamingResponse
@@ -20,6 +22,33 @@ from backend.app.services import resume_analyzer
 from backend.app.services import resume_parser
 from backend.app.services import job_analyzer
 from backend.app.services import apply_pack_generator
+
+# #region agent log
+_AGENT_DEBUG_LOG_PATH = r"c:\Users\abdul\Desktop\jobscout\.cursor\debug.log"
+
+
+def _agent_log(
+    message: str,
+    data: Optional[dict] = None,
+    hypothesis_id: str = "H_APPLY_FLOW",
+    run_id: str = "pre-fix",
+) -> None:
+    payload = {
+        "sessionId": "debug-session",
+        "runId": run_id,
+        "hypothesisId": hypothesis_id,
+        "location": "backend/app/api/apply.py",
+        "message": message,
+        "data": data or {},
+        "timestamp": int(time.time() * 1000),
+    }
+    try:
+        with open(_AGENT_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
+            f.write(json.dumps(payload) + "\n")
+    except Exception:
+        pass
+
+# #endregion agent log
 
 router = APIRouter(prefix="/apply", tags=["apply"])
 
@@ -84,6 +113,30 @@ class UpdateJobTargetRequest(BaseModel):
     salary_max: Optional[float] = None
     salary_currency: Optional[str] = None
     description_text: Optional[str] = None
+
+
+class JobScoutImportRequest(BaseModel):
+    """Import job from JobScout directly (no URL parsing needed)."""
+    job_id: Optional[str] = None  # JobScout job_id for auditing
+    job_url: Optional[str] = None
+    apply_url: Optional[str] = None
+    title: str
+    company: str
+    location_raw: Optional[str] = None
+    location: Optional[str] = None
+    remote_type: Optional[str] = None
+    employment_types: Optional[list[str]] = None
+    salary_min: Optional[float] = None
+    salary_max: Optional[float] = None
+    salary_currency: Optional[str] = None
+    description_text: Optional[str] = None
+    # Optional JobScout-specific fields (stored in extracted_json)
+    company_website: Optional[str] = None
+    linkedin_url: Optional[str] = None
+    ai_company_summary: Optional[str] = None
+    ai_summary: Optional[str] = None
+    ai_requirements: Optional[str] = None
+    ai_tech_stack: Optional[str] = None
 
 
 # ==================== Helper: Get or Create User ====================
@@ -222,6 +275,122 @@ async def parse_job(
             "apply_url": job_data.get("apply_url") or job_data.get("job_url"),
             "extracted": False,
             "extraction_method": extraction_method,
+        }
+
+
+@router.post("/job/import")
+async def import_job_from_jobscout(
+    request: JobScoutImportRequest,
+    user_id: UUID = Depends(get_user_id),
+):
+    """
+    Import a job from JobScout directly into Apply Workspace.
+    Creates a job_target without re-scraping the URL.
+    Stores JobScout-specific fields in extracted_json.
+    """
+    # #region agent log
+    _agent_log(
+        "import_job_from_jobscout:entry",
+        data={
+            "job_id": request.job_id,
+            "title_len": len(request.title or ""),
+            "company_len": len(request.company or ""),
+            "has_description_text": bool(request.description_text),
+            "description_len": len(request.description_text or ""),
+        },
+        hypothesis_id="H1_IMPORT_ENDPOINT",
+    )
+    # #endregion agent log
+    async with db.connection() as conn:
+        # Ensure user exists
+        user = await apply_storage.get_user(conn, user_id)
+        if not user:
+            await conn.execute(
+                """
+                INSERT INTO users (user_id, plan) 
+                VALUES ($1, 'free')
+                ON CONFLICT (user_id) DO NOTHING
+                """,
+                user_id
+            )
+        
+        # Build extracted_json with JobScout-specific fields
+        extracted_json = {
+            "source": "jobscout",
+            "job_id": request.job_id,
+            "company_website": request.company_website,
+            "linkedin_url": request.linkedin_url,
+            "ai_company_summary": request.ai_company_summary,
+            "ai_summary": request.ai_summary,
+            "ai_requirements": request.ai_requirements,
+            "ai_tech_stack": request.ai_tech_stack,
+        }
+        # Remove None values
+        extracted_json = {k: v for k, v in extracted_json.items() if v is not None}
+        
+        # Use location_raw if provided, otherwise location
+        location = request.location_raw or request.location
+        
+        # Convert employment_types list to string if needed
+        employment_type = request.employment_types
+        if isinstance(employment_type, list):
+            employment_type = ", ".join(employment_type) if employment_type else None
+        
+        # Analyze job description to extract requirements, keywords, must-haves
+        description_text = request.description_text or ""
+        job_analysis = await job_analyzer.analyze_job(description_text, use_ai=False)  # Use heuristic for speed
+        
+        # Create job target directly (no URL parsing)
+        job_target = await apply_storage.create_job_target(
+            conn,
+            user_id=user_id,
+            job_url=request.job_url,
+            job_text=description_text,  # Use description_text as job_text
+            extracted_json=extracted_json,
+            title=request.title,
+            company=request.company,
+            location=location,
+            remote_type=request.remote_type,
+            employment_type=employment_type,
+            salary_min=request.salary_min,
+            salary_max=request.salary_max,
+            salary_currency=request.salary_currency,
+            description_text=description_text,
+            requirements=job_analysis.get("must_haves"),
+            keywords=job_analysis.get("keywords"),
+            must_haves=job_analysis.get("must_haves"),
+            role_rubric=job_analysis.get("rubric"),
+            html=None,  # No HTML since we're importing directly
+        )
+
+        # #region agent log
+        _agent_log(
+            "import_job_from_jobscout:created_job_target",
+            data={
+                "job_target_id": str(job_target.get("job_target_id")),
+                "extracted_json_keys": list(extracted_json.keys())[:25],
+                "keywords_count": len(job_analysis.get("keywords") or []),
+                "must_haves_count": len(job_analysis.get("must_haves") or []),
+            },
+            hypothesis_id="H1_IMPORT_ENDPOINT",
+        )
+        # #endregion agent log
+        
+        return {
+            "job_target_id": str(job_target["job_target_id"]),
+            "title": request.title,
+            "company": request.company,
+            "location": location,
+            "remote_type": request.remote_type,
+            "employment_type": request.employment_types or [],
+            "salary_min": request.salary_min,
+            "salary_max": request.salary_max,
+            "salary_currency": request.salary_currency,
+            "description_text": description_text,
+            "job_url": request.job_url,
+            "apply_url": request.apply_url or request.job_url,
+            "extracted": True,
+            "extraction_method": "jobscout_import",
         }
 
 
@@ -468,6 +637,18 @@ async def generate_apply_pack(
     Generate an apply pack (tailored resume content, cover note, ATS checklist).
     Checks quota before generating.
     """
+    # #region agent log
+    _agent_log(
+        "generate_apply_pack:entry",
+        data={
+            "has_job_url": bool(request.job_url),
+            "has_job_text": bool(request.job_text),
+            "resume_text_len": len(request.resume_text or ""),
+            "use_ai": bool(request.use_ai),
+        },
+        hypothesis_id="H2_PACK_GENERATION",
+    )
+    # #endregion agent log
     async with db.connection() as conn:
         # Check quota
         quota = await apply_storage.check_user_quota(conn, user_id, "apply_pack")
@@ -618,6 +799,22 @@ async def generate_apply_pack(
                 keyword_coverage=existing_pack.get("keyword_coverage"),
             )
         
+        # Extract company info from job_target (including from extracted_json for JobScout imports)
+        import json
+        extracted_json = job_target.get("extracted_json")
+        if isinstance(extracted_json, str):
+            try:
+                extracted_json = json.loads(extracted_json)
+            except:
+                extracted_json = {}
+        elif extracted_json is None:
+            extracted_json = {}
+        
+        job_title = job_target.get("title")
+        company_name = job_target.get("company")
+        company_summary = extracted_json.get("ai_company_summary") or extracted_json.get("company_summary")
+        company_website = extracted_json.get("company_website")
+        
         # Generate apply pack
         pack_data = await apply_pack_generator.generate_apply_pack(
             resume_text=request.resume_text,
@@ -625,7 +822,26 @@ async def generate_apply_pack(
             job_description=job_target.get("description_text", request.job_text or ""),
             job_analysis=job_analysis,
             use_ai=request.use_ai,
+            job_title=job_title,
+            company_name=company_name,
+            company_summary=company_summary,
+            company_website=company_website,
         )
+        # #region agent log
+        _agent_log(
+            "generate_apply_pack:pack_generated",
+            data={
+                "job_title_present": bool(job_title),
+                "company_name_present": bool(company_name),
+                "company_summary_present": bool(company_summary),
+                "company_website_present": bool(company_website),
+                "cover_note_len": len(pack_data.get("cover_note") or ""),
+                "tailored_summary_len": len(pack_data.get("tailored_summary") or ""),
+                "bullets_count": len(pack_data.get("tailored_bullets") or []),
+            },
+            hypothesis_id="H2_PACK_GENERATION",
+        )
+        # #endregion agent log
         
         # Convert UUIDs if needed (asyncpg returns UUID objects, not strings)
         resume_id_val = resume["resume_id"]
@@ -747,6 +963,13 @@ async def export_apply_pack_docx(
     Export apply pack as DOCX file.
     Paid feature only.
     """
+    # #region agent log
+    _agent_log(
+        "export_apply_pack_docx:entry",
+        data={"format": format, "apply_pack_id": str(apply_pack_id)},
+        hypothesis_id="H3_EXPORTS",
+    )
+    # #endregion agent log
     async with db.connection() as conn:
         # Check quota (paid only)
         quota = await apply_storage.check_user_quota(conn, user_id, "docx_export")
@@ -809,6 +1032,18 @@ async def export_apply_pack_docx(
                     company_name=apply_pack.get("company"),
                 )
                 filename = "apply_pack.docx"
+
+            # #region agent log
+            _agent_log(
+                "export_apply_pack_docx:generated",
+                data={
+                    "format": format,
+                    "resume_text_present": bool(apply_pack.get("resume_text")),
+                    "cover_note_len": len(apply_pack.get("cover_note") or ""),
+                },
+                hypothesis_id="H3_EXPORTS",
+            )
+            # #endregion agent log
             
             # Record usage
             await apply_storage.record_usage(conn, user_id, "docx_export", apply_pack_id)

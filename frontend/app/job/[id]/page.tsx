@@ -149,6 +149,14 @@ export default async function JobPage({ params }: PageProps) {
                 <ExternalLink className="h-4 w-4" />
               </a>
               
+              <Link
+                href={`/apply?jobId=${job.job_id}`}
+                className="inline-flex items-center gap-2 rounded-lg border border-border bg-background px-5 py-2.5 text-sm font-medium transition-colors hover:bg-muted"
+              >
+                Open in Apply Workspace
+                <Sparkles className="h-4 w-4" />
+              </Link>
+              
               {job.job_url && job.job_url !== job.apply_url && (
                 <a
                   href={job.job_url}
