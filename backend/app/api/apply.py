@@ -23,6 +23,16 @@ from backend.app.services import apply_pack_generator
 
 router = APIRouter(prefix="/apply", tags=["apply"])
 
+# python-multipart is required by FastAPI for UploadFile/File(...) endpoints.
+# In misconfigured dev environments, FastAPI raises at import time, which prevents the whole API from starting.
+# We guard the upload endpoint so the app can still boot and return a clear error message.
+try:
+    import multipart  # type: ignore  # noqa: F401
+
+    _HAS_MULTIPART = True
+except Exception:
+    _HAS_MULTIPART = False
+
 
 # ==================== Request/Response Models ====================
 
@@ -215,56 +225,64 @@ async def parse_job(
         }
 
 
-@router.post("/resume/upload")
-async def upload_resume(
-    file: UploadFile = File(...),
-    user_id: UUID = Depends(get_user_id),
-):
-    """
-    Upload a resume file (PDF or DOCX) and extract text.
-    
-    Returns extracted text that can be used for apply pack generation.
-    """
-    # Validate file type
-    if not file.filename:
-        raise HTTPException(status_code=400, detail="No filename provided")
-    
-    file_lower = file.filename.lower()
-    if not (file_lower.endswith('.pdf') or file_lower.endswith('.docx') or file_lower.endswith('.doc')):
+if _HAS_MULTIPART:
+    @router.post("/resume/upload")
+    async def upload_resume(
+        file: UploadFile = File(...),
+        user_id: UUID = Depends(get_user_id),
+    ):
+        """
+        Upload a resume file (PDF or DOCX) and extract text.
+
+        Returns extracted text that can be used for apply pack generation.
+        """
+        # Validate file type
+        if not file.filename:
+            raise HTTPException(status_code=400, detail="No filename provided")
+
+        file_lower = file.filename.lower()
+        if not (file_lower.endswith(".pdf") or file_lower.endswith(".docx") or file_lower.endswith(".doc")):
+            raise HTTPException(
+                status_code=400,
+                detail="Unsupported file type. Supported: PDF, DOCX",
+            )
+
+        # Check file size (max 10MB)
+        MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
+        file_content = await file.read()
+        if len(file_content) > MAX_FILE_SIZE:
+            raise HTTPException(
+                status_code=400,
+                detail="File too large. Maximum size: 10MB",
+            )
+
+        # Parse the file
+        result = await resume_parser.parse_resume_file(file_content, file.filename)
+
+        if result.get("error"):
+            raise HTTPException(
+                status_code=400,
+                detail=result["error"],
+            )
+
+        if not result.get("text") or len(result["text"].strip()) < 50:
+            raise HTTPException(
+                status_code=400,
+                detail="Could not extract sufficient text from file. Please ensure the file is a valid resume.",
+            )
+
+        return {
+            "resume_text": result["text"],
+            "filename": file.filename,
+            "size": len(file_content),
+        }
+else:
+    @router.post("/resume/upload")
+    async def upload_resume_unavailable(user_id: UUID = Depends(get_user_id)):
         raise HTTPException(
-            status_code=400,
-            detail="Unsupported file type. Supported: PDF, DOCX"
+            status_code=501,
+            detail='Resume upload requires "python-multipart". Install backend dependencies: pip install -r backend/requirements.txt',
         )
-    
-    # Check file size (max 10MB)
-    MAX_FILE_SIZE = 10 * 1024 * 1024  # 10MB
-    file_content = await file.read()
-    if len(file_content) > MAX_FILE_SIZE:
-        raise HTTPException(
-            status_code=400,
-            detail=f"File too large. Maximum size: 10MB"
-        )
-    
-    # Parse the file
-    result = await resume_parser.parse_resume_file(file_content, file.filename)
-    
-    if result.get("error"):
-        raise HTTPException(
-            status_code=400,
-            detail=result["error"]
-        )
-    
-    if not result.get("text") or len(result["text"].strip()) < 50:
-        raise HTTPException(
-            status_code=400,
-            detail="Could not extract sufficient text from file. Please ensure the file is a valid resume."
-        )
-    
-    return {
-        "resume_text": result["text"],
-        "filename": file.filename,
-        "size": len(file_content),
-    }
 
 
 @router.put("/job/{job_target_id}")
