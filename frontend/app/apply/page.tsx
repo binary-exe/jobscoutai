@@ -48,18 +48,21 @@ export default function ApplyWorkspacePage() {
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
+  // Prevent infinite retry loops: attempt auto-import at most once per jobId
+  const [autoImportAttemptedJobId, setAutoImportAttemptedJobId] = useState<string | null>(null);
 
   // Auto-import job from JobScout if jobId is in query params
   useEffect(() => {
     const jobId = searchParams?.get('jobId');
-    if (jobId && !parsedJob && !isImporting) {
+    if (jobId && !parsedJob && !isImporting && jobId !== autoImportAttemptedJobId) {
+      setAutoImportAttemptedJobId(jobId);
       // #region agent log
       agentLog('auto_import:detected_jobId', { jobId }, 'H4_AUTO_IMPORT');
       // #endregion agent log
       handleImportFromJobScout(jobId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, parsedJob, isImporting]);
+  }, [searchParams, parsedJob, isImporting, autoImportAttemptedJobId]);
 
   const handleImportFromJobScout = async (jobId: string) => {
     setIsImporting(true);
