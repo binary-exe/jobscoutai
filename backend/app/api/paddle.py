@@ -2,18 +2,21 @@
 Paddle payment webhook handler for Apply Workspace.
 
 Handles subscription events from Paddle.
+Checkout requires authenticated Supabase user (no anonymous users for billing).
 """
 
 import hmac
 import hashlib
 import json
 from typing import Dict, Any
+from uuid import UUID
 
-from fastapi import APIRouter, HTTPException, Request, Header
+from fastapi import APIRouter, HTTPException, Request, Header, Depends
 from pydantic import BaseModel
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import db
+from backend.app.core.auth import get_current_user, AuthUser
 from backend.app.storage import apply_storage
 
 router = APIRouter(prefix="/paddle", tags=["paddle"])
@@ -95,23 +98,73 @@ async def handle_paddle_webhook(
     return {"status": "ok"}
 
 
+async def _find_user_from_webhook(conn, data: Dict[str, Any]):
+    """
+    Find user from webhook data using multiple strategies.
+    
+    Priority order:
+    1. custom_data.user_id (most reliable - set during checkout)
+    2. paddle_customer_id
+    3. subscription_id
+    """
+    # Strategy 1: custom_data.user_id
+    custom_data = data.get("custom_data") or {}
+    if isinstance(custom_data, str):
+        try:
+            custom_data = json.loads(custom_data)
+        except:
+            custom_data = {}
+    
+    custom_user_id = custom_data.get("user_id")
+    if custom_user_id:
+        try:
+            user_uuid = UUID(custom_user_id)
+            user = await conn.fetchrow(
+                "SELECT user_id FROM users WHERE user_id = $1",
+                user_uuid
+            )
+            if user:
+                return user
+        except (ValueError, TypeError):
+            pass
+    
+    # Strategy 2: paddle_customer_id
+    customer_id = data.get("customer_id")
+    if customer_id:
+        user = await conn.fetchrow(
+            "SELECT user_id FROM users WHERE paddle_customer_id = $1",
+            str(customer_id)
+        )
+        if user:
+            return user
+    
+    # Strategy 3: subscription_id
+    subscription_id = data.get("id") or data.get("subscription_id")
+    if subscription_id:
+        user = await conn.fetchrow(
+            "SELECT user_id FROM users WHERE subscription_id = $1",
+            str(subscription_id)
+        )
+        if user:
+            return user
+    
+    return None
+
+
 async def _handle_subscription_created(conn, data: Dict[str, Any]):
     """Handle subscription.created event."""
     customer_id = data.get("customer_id")
     subscription_id = data.get("id")
     
-    if not customer_id or not subscription_id:
-        print(f"Missing customer_id or subscription_id in subscription.created: {data}")
+    if not subscription_id:
+        print(f"Missing subscription_id in subscription.created: {data}")
         return
     
-    # Find user by Paddle customer ID
-    user = await conn.fetchrow(
-        "SELECT user_id FROM users WHERE paddle_customer_id = $1",
-        str(customer_id)
-    )
+    # Find user using multiple strategies
+    user = await _find_user_from_webhook(conn, data)
     
     if not user:
-        print(f"User not found for customer_id: {customer_id}")
+        print(f"User not found for subscription.created: customer_id={customer_id}, custom_data={data.get('custom_data')}")
         return
     
     # Upgrade to paid
@@ -120,7 +173,7 @@ async def _handle_subscription_created(conn, data: Dict[str, Any]):
         user_id=user["user_id"],
         plan="paid",
         subscription_id=str(subscription_id),
-        paddle_customer_id=str(customer_id),
+        paddle_customer_id=str(customer_id) if customer_id else None,
         subscription_status="active",
     )
     
@@ -131,26 +184,15 @@ async def _handle_subscription_updated(conn, data: Dict[str, Any]):
     """Handle subscription.updated event."""
     subscription_id = data.get("id")
     status = data.get("status")
-    customer_id = data.get("customer_id")
     
     if not subscription_id:
         return
     
-    # Find user by subscription ID
-    user = await conn.fetchrow(
-        "SELECT user_id FROM users WHERE subscription_id = $1",
-        str(subscription_id)
-    )
-    
-    if not user and customer_id:
-        # Try by customer ID
-        user = await conn.fetchrow(
-            "SELECT user_id FROM users WHERE paddle_customer_id = $1",
-            str(customer_id)
-        )
+    # Find user using multiple strategies
+    user = await _find_user_from_webhook(conn, data)
     
     if not user:
-        print(f"User not found for subscription_id: {subscription_id}")
+        print(f"User not found for subscription.updated: subscription_id={subscription_id}")
         return
     
     # Update subscription status
@@ -172,14 +214,11 @@ async def _handle_subscription_cancelled(conn, data: Dict[str, Any]):
     if not subscription_id:
         return
     
-    # Find user by subscription ID
-    user = await conn.fetchrow(
-        "SELECT user_id FROM users WHERE subscription_id = $1",
-        str(subscription_id)
-    )
+    # Find user using multiple strategies
+    user = await _find_user_from_webhook(conn, data)
     
     if not user:
-        print(f"User not found for subscription_id: {subscription_id}")
+        print(f"User not found for subscription.cancelled: subscription_id={subscription_id}")
         return
     
     # Mark for downgrade at period end
@@ -209,14 +248,11 @@ async def _handle_payment_succeeded(conn, data: Dict[str, Any]):
     if not subscription_id:
         return
     
-    # Find user by subscription ID
-    user = await conn.fetchrow(
-        "SELECT user_id FROM users WHERE subscription_id = $1",
-        str(subscription_id)
-    )
+    # Find user using multiple strategies
+    user = await _find_user_from_webhook(conn, data)
     
     if not user:
-        print(f"User not found for subscription_id: {subscription_id}")
+        print(f"User not found for payment.succeeded: subscription_id={subscription_id}")
         return
     
     # Extend subscription (Paddle handles this, but we update status)
@@ -237,14 +273,11 @@ async def _handle_payment_failed(conn, data: Dict[str, Any]):
     if not subscription_id:
         return
     
-    # Find user by subscription ID
-    user = await conn.fetchrow(
-        "SELECT user_id FROM users WHERE subscription_id = $1",
-        str(subscription_id)
-    )
+    # Find user using multiple strategies
+    user = await _find_user_from_webhook(conn, data)
     
     if not user:
-        print(f"User not found for subscription_id: {subscription_id}")
+        print(f"User not found for payment.failed: subscription_id={subscription_id}")
         return
     
     # Mark as past due
@@ -260,13 +293,16 @@ async def _handle_payment_failed(conn, data: Dict[str, Any]):
 
 @router.get("/checkout-url")
 async def get_checkout_url(
-    user_id: str = Header(..., alias="X-User-ID"),
+    auth_user: AuthUser = Depends(get_current_user),
 ):
     """
-    Get Paddle checkout URL for user.
+    Get Paddle checkout URL for authenticated user.
     
     Creates a checkout link via Paddle API for the Pro subscription (€9/month).
     Returns checkout URL that user can redirect to.
+    
+    REQUIRES AUTHENTICATION: Only authenticated Supabase users can start checkout.
+    This ensures billing is tied to a verified identity.
     
     Note: Requires Paddle product and price setup in Paddle dashboard.
     Set JOBSCOUT_PADDLE_PRODUCT_ID environment variable with your product ID.
@@ -276,10 +312,24 @@ async def get_checkout_url(
     if not settings.paddle_api_key:
         raise HTTPException(status_code=500, detail="Paddle API key not configured")
     
-    # Get or create user to ensure we have a user record
+    # Get or create user record with Supabase UUID
+    user_uuid = auth_user.user_id
     async with db.connection() as conn:
-        user = await apply_storage.get_or_create_user(conn)
-        user_uuid = UUID(user["user_id"])
+        # Ensure user exists in our DB
+        await conn.execute(
+            """
+            INSERT INTO users (user_id, email, plan)
+            VALUES ($1, $2, 'free')
+            ON CONFLICT (user_id)
+            DO UPDATE SET email = COALESCE(EXCLUDED.email, users.email), updated_at = NOW()
+            """,
+            user_uuid,
+            auth_user.email,
+        )
+        
+        user = await apply_storage.get_user(conn, user_uuid)
+        if not user:
+            raise HTTPException(status_code=500, detail="Failed to create user record")
         
         # Check if user already has a subscription
         if user.get("plan") == "paid" and user.get("subscription_status") == "active":

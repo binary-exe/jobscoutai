@@ -12,7 +12,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import db
-from backend.app.api import jobs, admin, apply, paddle, scrape, runs
+from backend.app.api import jobs, admin, apply, paddle, scrape, runs, profile, referrals, saved_searches
 
 
 @asynccontextmanager
@@ -127,9 +127,12 @@ def create_app() -> FastAPI:
     app.include_router(jobs.router, prefix=settings.api_prefix)
     app.include_router(admin.router, prefix=settings.api_prefix)
     app.include_router(apply.router, prefix=settings.api_prefix)
+    app.include_router(profile.router, prefix=settings.api_prefix)
     app.include_router(paddle.router, prefix=settings.api_prefix)
     app.include_router(scrape.router, prefix=settings.api_prefix)
     app.include_router(runs.router, prefix=settings.api_prefix)
+    app.include_router(referrals.router, prefix=settings.api_prefix)
+    app.include_router(saved_searches.router, prefix=settings.api_prefix)
 
     @app.get("/")
     async def root():

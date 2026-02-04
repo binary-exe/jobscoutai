@@ -1,39 +1,26 @@
 'use client';
 
 import { useState, useEffect } from 'react';
-import { useSearchParams } from 'next/navigation';
+import { useSearchParams, useRouter } from 'next/navigation';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { FileText, Link as LinkIcon, Sparkles, CheckCircle2, AlertTriangle, Clock, Loader2, Edit2, Save, Shield, AlertCircle } from 'lucide-react';
-import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, uploadResume, importJobFromJobScout, type ParsedJob, type ApplyPack, type TrustReport } from '@/lib/apply-api';
+import Link from 'next/link';
+import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, uploadResume, importJobFromJobScout, createApplication, getHistory, type ParsedJob, type ApplyPack, type TrustReport } from '@/lib/apply-api';
 import type { JobDetail } from '@/lib/api';
-
-// #region agent log
-const agentLog = (
-  message: string,
-  data: Record<string, unknown> = {},
-  hypothesisId: string = 'H_UI_FLOW',
-  runId: string = 'pre-fix'
-) => {
-  fetch('http://127.0.0.1:7242/ingest/de514c6d-c2f9-42e3-8e05-845dd72b3ef2', {
-    method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({
-      sessionId: 'debug-session',
-      runId,
-      hypothesisId,
-      location: 'frontend/app/apply/page.tsx',
-      message,
-      data,
-      timestamp: Date.now(),
-    }),
-  }).catch(() => {});
-};
-// #endregion agent log
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
+import { getProfile, getResume } from '@/lib/profile-api';
+import { trackApplyWorkspaceOpened, trackJobImported, trackTrustReportGenerated, trackApplyPackCreated, trackFirstApplyPackCreated, trackApplicationTracked, trackDocxDownloaded, trackEvent, setUserProperties } from '@/lib/analytics';
 
 export default function ApplyWorkspacePage() {
   const searchParams = useSearchParams();
+  const router = useRouter();
+  const [authChecked, setAuthChecked] = useState(false);
+  const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [resumeText, setResumeText] = useState('');
+  const [profileResumeVersions, setProfileResumeVersions] = useState<any[]>([]);
+  const [selectedProfileResumeId, setSelectedProfileResumeId] = useState<string | null>(null);
+  const [isLoadingProfileResume, setIsLoadingProfileResume] = useState(false);
   const [jobUrl, setJobUrl] = useState('');
   const [jobText, setJobText] = useState('');
   const [isParsing, setIsParsing] = useState(false);
@@ -50,19 +37,137 @@ export default function ApplyWorkspacePage() {
   const [isImporting, setIsImporting] = useState(false);
   // Prevent infinite retry loops: attempt auto-import at most once per jobId
   const [autoImportAttemptedJobId, setAutoImportAttemptedJobId] = useState<string | null>(null);
+  const [trackedApplicationId, setTrackedApplicationId] = useState<string | null>(null);
+  const [isTracking, setIsTracking] = useState(false);
+  const [showOnboarding, setShowOnboarding] = useState(false);
+  const [hasProfile, setHasProfile] = useState(false);
+
+  // Auth check - redirect to login if not authenticated
+  useEffect(() => {
+    let cancelled = false;
+
+    (async () => {
+      // Skip auth check if Supabase not configured (dev mode)
+      if (!isSupabaseConfigured()) {
+        setAuthChecked(true);
+        setIsAuthenticated(true);
+        return;
+      }
+
+      const { data } = await supabase.auth.getSession();
+      if (cancelled) return;
+
+      if (data.session) {
+        setIsAuthenticated(true);
+        // Track workspace opened
+        const source = searchParams?.get('jobId') ? 'job_detail' : 'direct';
+        trackApplyWorkspaceOpened(source as 'direct' | 'job_card' | 'job_detail');
+      } else {
+        // Redirect to login with return URL
+        const returnUrl = typeof window !== 'undefined' ? window.location.pathname + window.location.search : '/apply';
+        router.replace(`/login?next=${encodeURIComponent(returnUrl)}`);
+        return;
+      }
+      setAuthChecked(true);
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [router, searchParams]);
+
+  // If logged in, auto-load primary resume from Profile once
+  useEffect(() => {
+    if (!authChecked || !isAuthenticated) return;
+
+    let cancelled = false;
+
+    (async () => {
+      try {
+        setIsLoadingProfileResume(true);
+
+        const prof = await getProfile();
+        if (cancelled) return;
+        
+        const resumeVersions = prof.resume_versions || [];
+        setProfileResumeVersions(resumeVersions);
+
+        const primaryId = prof.profile?.primary_resume_id ? String(prof.profile.primary_resume_id) : null;
+        
+        // Check if user has a profile/resume (for onboarding)
+        const hasExistingProfile = !!(prof.profile || resumeVersions.length > 0);
+        setHasProfile(hasExistingProfile);
+        const hasResume = resumeVersions.length > 0;
+        const hasCompletedProfile = !!prof.profile && !!(prof.profile.headline || prof.profile.skills?.length || prof.profile.desired_roles?.length);
+        setUserProperties({ has_resume: hasResume, has_completed_profile: hasCompletedProfile });
+        
+        // Show onboarding banner for first-time users without a resume
+        if (!hasExistingProfile && !localStorage.getItem('jobscout_onboarding_dismissed')) {
+          setShowOnboarding(true);
+        }
+        
+        if (primaryId) {
+          setSelectedProfileResumeId(primaryId);
+          // Only auto-fill if user hasn't already typed or uploaded a resume
+          if (!resumeText.trim()) {
+            const r = await getResume(primaryId);
+            if (cancelled) return;
+            const text = (r?.resume?.resume_text || '').toString();
+            if (text) {
+              setResumeText(text);
+              setUploadedFileName('Profile resume (primary)');
+            }
+          }
+        }
+      } catch {
+        // Ignore; Apply workspace works without profile
+        // Show onboarding for new users who hit profile not found
+        if (!localStorage.getItem('jobscout_onboarding_dismissed')) {
+          setShowOnboarding(true);
+        }
+      } finally {
+        if (!cancelled) setIsLoadingProfileResume(false);
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authChecked, isAuthenticated]);
+
+  const handleSelectProfileResume = async (resumeId: string) => {
+    setError(null);
+    setIsLoadingProfileResume(true);
+    try {
+      setSelectedProfileResumeId(resumeId);
+      const r = await getResume(resumeId);
+      const text = (r?.resume?.resume_text || '').toString();
+      if (text) {
+        setResumeText(text);
+        setUploadedFileName('Profile resume');
+      } else {
+        setError('Could not load selected resume');
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to load resume');
+    } finally {
+      setIsLoadingProfileResume(false);
+    }
+  };
 
   // Auto-import job from JobScout if jobId is in query params
+  // Wait for auth to complete before attempting import
   useEffect(() => {
+    if (!authChecked || !isAuthenticated) return;
+    
     const jobId = searchParams?.get('jobId');
     if (jobId && !parsedJob && !isImporting && jobId !== autoImportAttemptedJobId) {
       setAutoImportAttemptedJobId(jobId);
-      // #region agent log
-      agentLog('auto_import:detected_jobId', { jobId }, 'H4_AUTO_IMPORT');
-      // #endregion agent log
       handleImportFromJobScout(jobId);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [searchParams, parsedJob, isImporting, autoImportAttemptedJobId]);
+  }, [searchParams, parsedJob, isImporting, autoImportAttemptedJobId, authChecked, isAuthenticated]);
 
   const handleImportFromJobScout = async (jobId: string) => {
     setIsImporting(true);
@@ -98,10 +203,6 @@ export default function ApplyWorkspacePage() {
         ai_tech_stack: job.ai_tech_stack,
       });
 
-      // #region agent log
-      agentLog('auto_import:imported_job_target', { jobTargetId: result.job_target_id }, 'H4_AUTO_IMPORT');
-      // #endregion agent log
-      
       setParsedJob(result);
       setEditedJob({
         title: result.title,
@@ -122,6 +223,9 @@ export default function ApplyWorkspacePage() {
       if (result.description_text) {
         setJobText(result.description_text);
       }
+      
+      // Track job import
+      trackJobImported(result.job_target_id, 'jobscout_import');
       
       // Automatically generate trust report
       handleGenerateTrustReport(result.job_target_id);
@@ -164,11 +268,16 @@ export default function ApplyWorkspacePage() {
     }
   };
 
-  const handleGenerateTrustReport = async (jobTargetId: string) => {
+  const handleGenerateTrustReport = async (
+    jobTargetId: string,
+    opts: { force?: boolean; refresh_apply_link?: boolean } = {}
+  ) => {
     setIsGeneratingTrust(true);
     try {
-      const report = await generateTrustReport(jobTargetId);
+      const report = await generateTrustReport(jobTargetId, opts);
       setTrustReport(report);
+      // Track trust report generation
+      trackTrustReportGenerated(jobTargetId, report.trust_score);
     } catch (err) {
       // Don't show error for trust report - it's optional
       console.error('Failed to generate trust report:', err);
@@ -199,6 +308,7 @@ export default function ApplyWorkspacePage() {
       const result = await uploadResume(file);
       setResumeText(result.resume_text);
       setUploadedFileName(result.filename);
+      trackEvent('resume_uploaded', { context: 'apply_workspace' });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to upload resume');
     } finally {
@@ -237,6 +347,7 @@ export default function ApplyWorkspacePage() {
 
     setIsGenerating(true);
     setError(null);
+    trackEvent('apply_pack_generation_started', {});
     try {
       const pack = await generateApplyPack(
         resumeText,
@@ -245,12 +356,61 @@ export default function ApplyWorkspacePage() {
         true
       );
       setApplyPack(pack);
+      const { total } = await getHistory().catch(() => ({ total: 1 }));
+      trackApplyPackCreated(pack.apply_pack_id, total);
+      if (total === 1) {
+        trackFirstApplyPackCreated(pack.apply_pack_id);
+      }
+      trackEvent('apply_pack_generation_completed', { apply_pack_id: pack.apply_pack_id });
+      setTrackedApplicationId(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to generate apply pack');
     } finally {
       setIsGenerating(false);
     }
   };
+
+  const handleStartTracking = async () => {
+    if (!applyPack || !parsedJob) {
+      setError('Please generate an apply pack first');
+      return;
+    }
+
+    setIsTracking(true);
+    setError(null);
+    try {
+      const application = await createApplication(
+        applyPack.apply_pack_id,
+        parsedJob.job_target_id,
+        'applied'
+      );
+      setTrackedApplicationId(application.application_id);
+      // Track application started
+      trackApplicationTracked(application.application_id);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to start tracking');
+    } finally {
+      setIsTracking(false);
+    }
+  };
+
+  // Show loading while checking auth
+  if (!authChecked) {
+    return (
+      <>
+        <Header />
+        <main className="flex-1">
+          <div className="container mx-auto max-w-7xl px-4 py-12">
+            <div className="flex flex-col items-center justify-center space-y-4">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <p className="text-muted-foreground">Checking authentication...</p>
+            </div>
+          </div>
+        </main>
+        <Footer />
+      </>
+    );
+  }
 
   return (
     <>
@@ -273,6 +433,49 @@ export default function ApplyWorkspacePage() {
             </p>
           </div>
 
+          {/* Onboarding Banner for First-Time Users */}
+          {showOnboarding && (
+            <div className="mb-6 rounded-xl border border-primary/30 bg-primary/5 p-6">
+              <div className="flex items-start justify-between gap-4">
+                <div className="flex-1">
+                  <h3 className="text-lg font-semibold mb-2">Welcome to Apply Workspace!</h3>
+                  <p className="text-sm text-muted-foreground mb-4">
+                    Get started by uploading your resume below. Your resume will be saved to your profile 
+                    for easy reuse across applications.
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <Link
+                      href="/profile"
+                      className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                    >
+                      <FileText className="h-4 w-4" />
+                      Complete Profile Setup
+                    </Link>
+                    <button
+                      onClick={() => {
+                        setShowOnboarding(false);
+                        localStorage.setItem('jobscout_onboarding_dismissed', 'true');
+                      }}
+                      className="text-sm text-muted-foreground hover:text-foreground"
+                    >
+                      Skip for now
+                    </button>
+                  </div>
+                </div>
+                <button
+                  onClick={() => {
+                    setShowOnboarding(false);
+                    localStorage.setItem('jobscout_onboarding_dismissed', 'true');
+                  }}
+                  className="text-muted-foreground hover:text-foreground"
+                  aria-label="Dismiss"
+                >
+                  <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+                </button>
+              </div>
+            </div>
+          )}
+
           {/* Main Workspace */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* Left Pane - Inputs */}
@@ -288,6 +491,38 @@ export default function ApplyWorkspacePage() {
                     <label className="block text-sm font-medium mb-2">
                       Upload PDF/DOCX or paste text
                     </label>
+
+                    {/* Profile resume selector (if logged in) */}
+                    {profileResumeVersions.length > 0 && (
+                      <div className="mb-3">
+                        <label className="block text-xs font-medium text-muted-foreground uppercase tracking-wider mb-1">
+                          Use saved resume
+                        </label>
+                        <select
+                          value={selectedProfileResumeId || ''}
+                          onChange={(e) => {
+                            const v = e.target.value;
+                            if (v) handleSelectProfileResume(v);
+                          }}
+                          disabled={isLoadingProfileResume}
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary disabled:opacity-60"
+                        >
+                          <option value="">Select a saved resume…</option>
+                          {profileResumeVersions.map((r) => {
+                            const id = String(r.resume_id);
+                            const created = r.created_at ? new Date(r.created_at).toLocaleDateString() : '';
+                            return (
+                              <option key={id} value={id}>
+                                {created ? `${created} · ${id.slice(0, 8)}` : id}
+                              </option>
+                            );
+                          })}
+                        </select>
+                        <p className="mt-1 text-xs text-muted-foreground">
+                          Or upload/paste a different resume below for this application.
+                        </p>
+                      </div>
+                    )}
                     
                     {/* File Upload Area */}
                     <div
@@ -521,12 +756,49 @@ export default function ApplyWorkspacePage() {
                       <Shield className="h-5 w-5" />
                       Trust Report
                     </h2>
-                    <div className="text-xs text-muted-foreground italic">
-                      Signals only, not guarantees
+                    <div className="flex items-center gap-3">
+                      <button
+                        onClick={() => parsedJob && handleGenerateTrustReport(parsedJob.job_target_id, { force: true, refresh_apply_link: true })}
+                        disabled={isGeneratingTrust || !parsedJob}
+                        className="text-xs rounded-lg border border-border px-3 py-1.5 hover:bg-muted disabled:opacity-50"
+                        type="button"
+                      >
+                        Re-run
+                      </button>
+                      <div className="text-xs text-muted-foreground italic">
+                        Signals only, not guarantees
+                      </div>
                     </div>
                   </div>
                   
                   <div className="space-y-4">
+                    {(trustReport.trust_score !== undefined && trustReport.trust_score !== null) && (
+                      <div className="flex items-center justify-between rounded-lg bg-muted/30 p-3">
+                        <span className="text-sm font-medium">Overall trust score</span>
+                        <span className="text-sm font-semibold">{trustReport.trust_score}/100</span>
+                      </div>
+                    )}
+
+                    {trustReport.apply_link_status && (
+                      <div className="text-xs text-muted-foreground">
+                        Apply link status: <span className="text-foreground">{trustReport.apply_link_status}</span>
+                      </div>
+                    )}
+
+                    {trustReport.domain_consistency_reasons && trustReport.domain_consistency_reasons.length > 0 && (
+                      <div className="rounded-lg border border-border bg-background p-3">
+                        <div className="text-sm font-medium mb-2 flex items-center gap-2">
+                          <AlertCircle className="h-4 w-4 text-hybrid" />
+                          Domain consistency warnings
+                        </div>
+                        <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-5">
+                          {trustReport.domain_consistency_reasons.map((reason, i) => (
+                            <li key={i}>{reason}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
                     {/* Scam Risk */}
                     <div>
                       <div className="flex items-center justify-between mb-2">
@@ -536,7 +808,7 @@ export default function ApplyWorkspacePage() {
                           trustReport.scam_risk === 'medium' ? 'bg-yellow-500/20 text-yellow-500' :
                           'bg-green-500/20 text-green-500'
                         }`}>
-                          {trustReport.scam_risk.toUpperCase()}
+                          {trustReport.scam_risk.toUpperCase()}{trustReport.scam_score !== undefined && trustReport.scam_score !== null ? ` (${trustReport.scam_score})` : ''}
                         </span>
                       </div>
                       {trustReport.scam_reasons.length > 0 && (
@@ -560,7 +832,7 @@ export default function ApplyWorkspacePage() {
                           trustReport.ghost_likelihood === 'medium' ? 'bg-yellow-500/20 text-yellow-500' :
                           'bg-green-500/20 text-green-500'
                         }`}>
-                          {trustReport.ghost_likelihood.toUpperCase()}
+                          {trustReport.ghost_likelihood.toUpperCase()}{trustReport.ghost_score !== undefined && trustReport.ghost_score !== null ? ` (${trustReport.ghost_score})` : ''}
                         </span>
                       </div>
                       {trustReport.ghost_reasons.length > 0 && (
@@ -701,6 +973,31 @@ export default function ApplyWorkspacePage() {
                   
                   {/* Actions */}
                   <div className="mt-4 pt-4 border-t border-border flex flex-wrap gap-2">
+                    {!trackedApplicationId && (
+                      <button
+                        onClick={handleStartTracking}
+                        disabled={isTracking}
+                        className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                      >
+                        {isTracking ? (
+                          <>
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                            Starting...
+                          </>
+                        ) : (
+                          'Start Tracking'
+                        )}
+                      </button>
+                    )}
+                    {trackedApplicationId && (
+                      <Link
+                        href={`/apply/history?application=${trackedApplicationId}`}
+                        className="rounded-lg bg-green-500/20 text-green-500 px-3 py-2 text-sm font-medium hover:bg-green-500/30 flex items-center gap-2"
+                      >
+                        <CheckCircle2 className="h-4 w-4" />
+                        View Application
+                      </Link>
+                    )}
                     <button
                       onClick={() => {
                         if (applyPack.tailored_summary) {
@@ -735,6 +1032,7 @@ export default function ApplyWorkspacePage() {
                             a.click();
                             window.URL.revokeObjectURL(url);
                             document.body.removeChild(a);
+                            trackDocxDownloaded(applyPack.apply_pack_id, 'resume');
                           } catch (err) {
                             alert(err instanceof Error ? err.message : 'DOCX export requires paid plan');
                           }
@@ -759,6 +1057,7 @@ export default function ApplyWorkspacePage() {
                               a.click();
                               window.URL.revokeObjectURL(url);
                               document.body.removeChild(a);
+                              trackDocxDownloaded(applyPack.apply_pack_id, 'cover');
                             } catch (err) {
                               alert(err instanceof Error ? err.message : 'DOCX export requires paid plan');
                             }
@@ -778,11 +1077,12 @@ export default function ApplyWorkspacePage() {
                             const url = window.URL.createObjectURL(blob);
                             const a = document.createElement('a');
                             a.href = url;
-                            a.download = `apply_pack_${applyPack.apply_pack_id.slice(0, 8)}.docx`;
+                            a.download = `apply_pack_${applyPack.apply_pack_id.slice(0, 8)}.zip`;
                             document.body.appendChild(a);
                             a.click();
                             window.URL.revokeObjectURL(url);
                             document.body.removeChild(a);
+                            trackDocxDownloaded(applyPack.apply_pack_id, 'combined');
                           } catch (err) {
                             alert(err instanceof Error ? err.message : 'DOCX export requires paid plan');
                           }
@@ -790,7 +1090,7 @@ export default function ApplyWorkspacePage() {
                       }}
                       className="rounded-lg border border-border bg-background px-3 py-2 text-sm hover:bg-muted"
                     >
-                      Download Combined DOCX
+                      Download Apply Pack (ZIP)
                     </button>
                   </div>
                 </div>

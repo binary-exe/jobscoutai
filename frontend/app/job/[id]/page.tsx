@@ -18,7 +18,8 @@ import {
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { FormattedDescription } from '@/components/FormattedDescription';
-import { getJob, formatRelativeTime, formatSalary } from '@/lib/api';
+import { JobViewTracker } from '@/components/JobViewTracker';
+import { getJob, formatRelativeTime, formatSalary, JobDetail } from '@/lib/api';
 import { cn } from '@/lib/utils';
 
 interface PageProps {
@@ -27,8 +28,79 @@ interface PageProps {
   };
 }
 
+// Generate JobPosting structured data for Google Jobs
+function generateJobPostingJsonLd(job: JobDetail) {
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://jobscoutai.vercel.app';
+  
+  // Build the structured data object
+  const jsonLd: Record<string, unknown> = {
+    '@context': 'https://schema.org/',
+    '@type': 'JobPosting',
+    title: job.title,
+    description: job.description_text || job.ai_summary || '',
+    datePosted: job.posted_at || job.first_seen_at,
+    hiringOrganization: {
+      '@type': 'Organization',
+      name: job.company,
+      ...(job.company_website && { sameAs: job.company_website }),
+    },
+    jobLocation: {
+      '@type': 'Place',
+      address: {
+        '@type': 'PostalAddress',
+        ...(job.location_raw && { addressLocality: job.location_raw }),
+        ...(job.country_iso && { addressCountry: job.country_iso }),
+      },
+    },
+    // Required: employment type
+    employmentType: job.employment_types?.map(t => t.toUpperCase().replace('-', '_')) || ['FULL_TIME'],
+  };
+
+  // Add remote/location type
+  if (job.remote_type === 'remote') {
+    jsonLd.jobLocationType = 'TELECOMMUTE';
+  }
+
+  // Add salary if available
+  if (job.salary_min || job.salary_max) {
+    jsonLd.baseSalary = {
+      '@type': 'MonetaryAmount',
+      currency: job.salary_currency || 'USD',
+      value: {
+        '@type': 'QuantitativeValue',
+        ...(job.salary_min && { minValue: job.salary_min }),
+        ...(job.salary_max && { maxValue: job.salary_max }),
+        unitText: 'YEAR',
+      },
+    };
+  }
+
+  // Add valid through (30 days from posting if not specified)
+  if (job.expires_at) {
+    jsonLd.validThrough = job.expires_at;
+  } else if (job.posted_at) {
+    const expiresDate = new Date(job.posted_at);
+    expiresDate.setDate(expiresDate.getDate() + 30);
+    jsonLd.validThrough = expiresDate.toISOString();
+  }
+
+  // Add identifier
+  jsonLd.identifier = {
+    '@type': 'PropertyValue',
+    name: 'JobScout',
+    value: job.job_id,
+  };
+
+  // Add direct apply URL
+  if (job.apply_url || job.job_url) {
+    jsonLd.directApply = true;
+  }
+
+  return jsonLd;
+}
+
 export default async function JobPage({ params }: PageProps) {
-  let job;
+  let job: JobDetail;
   try {
     job = await getJob(params.id);
   } catch {
@@ -36,9 +108,16 @@ export default async function JobPage({ params }: PageProps) {
   }
 
   const salary = formatSalary(job.salary_min, job.salary_max, job.salary_currency);
+  const jsonLd = generateJobPostingJsonLd(job);
 
   return (
     <>
+      {/* JobPosting structured data for Google Jobs */}
+      <script
+        type="application/ld+json"
+        dangerouslySetInnerHTML={{ __html: JSON.stringify(jsonLd) }}
+      />
+      <JobViewTracker jobId={job.job_id} jobTitle={job.title} company={job.company} />
       <Header />
       
       <main className="flex-1 py-8">

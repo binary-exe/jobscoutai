@@ -8,13 +8,14 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 import json
-import time
 
-from fastapi import APIRouter, HTTPException, Depends, Header, Response, UploadFile, File, Form
+from fastapi import APIRouter, HTTPException, Depends, Header, Response, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, HttpUrl
 
 from backend.app.core.database import db
+from backend.app.core.auth import get_current_user, AuthUser
+from backend.app.core.rate_limit import check_rate_limit, apply_pack_limiter
 from backend.app.storage import apply_storage
 from backend.app.services import job_parser
 from backend.app.services import trust_analyzer
@@ -22,33 +23,7 @@ from backend.app.services import resume_analyzer
 from backend.app.services import resume_parser
 from backend.app.services import job_analyzer
 from backend.app.services import apply_pack_generator
-
-# #region agent log
-_AGENT_DEBUG_LOG_PATH = r"c:\Users\abdul\Desktop\jobscout\.cursor\debug.log"
-
-
-def _agent_log(
-    message: str,
-    data: Optional[dict] = None,
-    hypothesis_id: str = "H_APPLY_FLOW",
-    run_id: str = "pre-fix",
-) -> None:
-    payload = {
-        "sessionId": "debug-session",
-        "runId": run_id,
-        "hypothesisId": hypothesis_id,
-        "location": "backend/app/api/apply.py",
-        "message": message,
-        "data": data or {},
-        "timestamp": int(time.time() * 1000),
-    }
-    try:
-        with open(_AGENT_DEBUG_LOG_PATH, "a", encoding="utf-8") as f:
-            f.write(json.dumps(payload) + "\n")
-    except Exception:
-        pass
-
-# #endregion agent log
+from backend.app.services import learning_summary
 
 router = APIRouter(prefix="/apply", tags=["apply"])
 
@@ -92,6 +67,9 @@ class TrustReportResponse(BaseModel):
     staleness_reasons: Optional[list[str]] = None
     scam_score: Optional[int] = None
     ghost_score: Optional[int] = None
+    apply_link_status: Optional[str] = None
+    domain_consistency_reasons: Optional[list[str]] = None
+    trust_score: Optional[int] = None
 
 
 class ApplyPackResponse(BaseModel):
@@ -113,6 +91,26 @@ class UpdateJobTargetRequest(BaseModel):
     salary_max: Optional[float] = None
     salary_currency: Optional[str] = None
     description_text: Optional[str] = None
+
+
+class ApplicationFeedbackRequest(BaseModel):
+    feedback_type: str  # 'rejection', 'shortlisted', 'offer', 'no_response', 'withdrawn'
+    raw_text: Optional[str] = None
+    parsed_json: Optional[dict] = None  # Optional: pre-parsed structure
+
+
+class CreateApplicationRequest(BaseModel):
+    apply_pack_id: Optional[UUID] = None
+    job_target_id: Optional[UUID] = None
+    status: str = "applied"
+    notes: Optional[str] = None
+    reminder_at: Optional[datetime] = None
+
+
+class UpdateApplicationRequest(BaseModel):
+    status: Optional[str] = None
+    notes: Optional[str] = None
+    reminder_at: Optional[datetime] = None
 
 
 class JobScoutImportRequest(BaseModel):
@@ -139,24 +137,29 @@ class JobScoutImportRequest(BaseModel):
     ai_tech_stack: Optional[str] = None
 
 
-# ==================== Helper: Get or Create User ====================
+# ==================== Helper: Require Authenticated User ====================
 
-async def get_user_id(x_user_id: Optional[str] = Header(None, alias="X-User-ID")) -> UUID:
-    """Get or create user from header. For now, we use anonymous users."""
-    if x_user_id:
-        try:
-            return UUID(x_user_id)
-        except ValueError:
-            pass
+async def require_auth_user(
+    auth_user: AuthUser = Depends(get_current_user),
+) -> UUID:
+    """
+    Require authenticated Supabase user for Apply Workspace endpoints.
     
-    # Create anonymous user
+    Creates/updates the user record in the Apply DB with the Supabase UUID and email.
+    This is the ONLY way to get a user_id for protected endpoints - no anonymous access.
+    """
     async with db.connection() as conn:
-        user = await apply_storage.get_or_create_user(conn)
-        user_id_val = user["user_id"]
-        # Handle asyncpg UUID objects
-        if isinstance(user_id_val, UUID):
-            return user_id_val
-        return UUID(user_id_val) if isinstance(user_id_val, str) else UUID(str(user_id_val))
+        await conn.execute(
+            """
+            INSERT INTO users (user_id, email, plan)
+            VALUES ($1, $2, 'free')
+            ON CONFLICT (user_id)
+            DO UPDATE SET email = COALESCE(EXCLUDED.email, users.email), updated_at = NOW()
+            """,
+            auth_user.user_id,
+            auth_user.email,
+        )
+    return auth_user.user_id
 
 
 # ==================== Endpoints ====================
@@ -164,7 +167,7 @@ async def get_user_id(x_user_id: Optional[str] = Header(None, alias="X-User-ID")
 @router.post("/job/parse")
 async def parse_job(
     request: JobIntakeRequest,
-    user_id: UUID = Depends(get_user_id),
+    user_id: UUID = Depends(require_auth_user),
 ):
     """
     Parse a job URL or text into structured fields.
@@ -195,6 +198,17 @@ async def parse_job(
         # Check if already exists
         existing = await apply_storage.get_job_target_by_hash(conn, job_hash)
         if existing:
+            existing_extracted = existing.get("extracted_json")
+            if isinstance(existing_extracted, str):
+                try:
+                    existing_extracted = json.loads(existing_extracted)
+                except Exception:
+                    existing_extracted = {}
+            elif existing_extracted is None:
+                existing_extracted = {}
+            if not isinstance(existing_extracted, dict):
+                existing_extracted = {}
+
             return {
                 "job_target_id": str(existing["job_target_id"]),
                 "title": existing.get("title"),
@@ -207,7 +221,7 @@ async def parse_job(
                 "salary_currency": existing.get("salary_currency"),
                 "description_text": existing.get("description_text"),
                 "job_url": existing.get("job_url"),
-                "apply_url": existing.get("job_url"),  # Use job_url as fallback
+                "apply_url": existing_extracted.get("apply_url") or existing.get("job_url"),  # Use job_url as fallback
                 "extracted": True,
                 "extraction_method": "cached",
             }
@@ -225,6 +239,21 @@ async def parse_job(
         else:
             job_data = job_parser.parse_job_text(request.job_text)
             extraction_method = "text"
+
+        # Ensure apply_url is persisted for Trust Report v2 (apply link health)
+        extracted_json = job_data.get("extracted_json") or {}
+        if isinstance(extracted_json, str):
+            try:
+                extracted_json = json.loads(extracted_json)
+            except Exception:
+                extracted_json = {}
+        if not isinstance(extracted_json, dict):
+            extracted_json = {}
+
+        extracted_json.setdefault("source", "apply_parse")
+        extracted_json["apply_url"] = job_data.get("apply_url") or job_data.get("job_url") or str(request.job_url)
+        if job_data.get("company_website"):
+            extracted_json.setdefault("company_website", job_data.get("company_website"))
         
         # Analyze job description to extract requirements, keywords, must-haves
         description_text = job_data.get("description_text") or request.job_text or ""
@@ -243,7 +272,7 @@ async def parse_job(
             user_id=user_id,
             job_url=str(request.job_url) if request.job_url else None,
             job_text=request.job_text,
-            extracted_json=job_data.get("extracted_json"),
+            extracted_json=extracted_json,
             title=job_data.get("title"),
             company=job_data.get("company"),
             location=job_data.get("location"),
@@ -281,26 +310,13 @@ async def parse_job(
 @router.post("/job/import")
 async def import_job_from_jobscout(
     request: JobScoutImportRequest,
-    user_id: UUID = Depends(get_user_id),
+    user_id: UUID = Depends(require_auth_user),
 ):
     """
     Import a job from JobScout directly into Apply Workspace.
     Creates a job_target without re-scraping the URL.
     Stores JobScout-specific fields in extracted_json.
     """
-    # #region agent log
-    _agent_log(
-        "import_job_from_jobscout:entry",
-        data={
-            "job_id": request.job_id,
-            "title_len": len(request.title or ""),
-            "company_len": len(request.company or ""),
-            "has_description_text": bool(request.description_text),
-            "description_len": len(request.description_text or ""),
-        },
-        hypothesis_id="H1_IMPORT_ENDPOINT",
-    )
-    # #endregion agent log
     async with db.connection() as conn:
         # Ensure user exists
         user = await apply_storage.get_user(conn, user_id)
@@ -318,6 +334,7 @@ async def import_job_from_jobscout(
         extracted_json = {
             "source": "jobscout",
             "job_id": request.job_id,
+            "apply_url": request.apply_url or request.job_url,
             "company_website": request.company_website,
             "linkedin_url": request.linkedin_url,
             "ai_company_summary": request.ai_company_summary,
@@ -363,19 +380,6 @@ async def import_job_from_jobscout(
             html=None,  # No HTML since we're importing directly
         )
 
-        # #region agent log
-        _agent_log(
-            "import_job_from_jobscout:created_job_target",
-            data={
-                "job_target_id": str(job_target.get("job_target_id")),
-                "extracted_json_keys": list(extracted_json.keys())[:25],
-                "keywords_count": len(job_analysis.get("keywords") or []),
-                "must_haves_count": len(job_analysis.get("must_haves") or []),
-            },
-            hypothesis_id="H1_IMPORT_ENDPOINT",
-        )
-        # #endregion agent log
-        
         return {
             "job_target_id": str(job_target["job_target_id"]),
             "title": request.title,
@@ -398,7 +402,7 @@ if _HAS_MULTIPART:
     @router.post("/resume/upload")
     async def upload_resume(
         file: UploadFile = File(...),
-        user_id: UUID = Depends(get_user_id),
+        user_id: UUID = Depends(require_auth_user),
     ):
         """
         Upload a resume file (PDF or DOCX) and extract text.
@@ -447,7 +451,7 @@ if _HAS_MULTIPART:
         }
 else:
     @router.post("/resume/upload")
-    async def upload_resume_unavailable(user_id: UUID = Depends(get_user_id)):
+    async def upload_resume_unavailable(user_id: UUID = Depends(require_auth_user)):
         raise HTTPException(
             status_code=501,
             detail='Resume upload requires "python-multipart". Install backend dependencies: pip install -r backend/requirements.txt',
@@ -458,7 +462,7 @@ else:
 async def update_job_target(
     job_target_id: UUID,
     request: UpdateJobTargetRequest,
-    user_id: UUID = Depends(get_user_id),
+    user_id: UUID = Depends(require_auth_user),
 ):
     """
     Update job target fields (for editable UI).
@@ -547,7 +551,9 @@ async def update_job_target(
 @router.post("/job/{job_target_id}/trust")
 async def generate_trust_report(
     job_target_id: UUID,
-    user_id: UUID = Depends(get_user_id),
+    force: bool = Query(False, description="Regenerate trust report even if cached"),
+    refresh_apply_link: bool = Query(False, description="Re-test apply link even if cached"),
+    user_id: UUID = Depends(require_auth_user),
 ):
     """
     Generate a trust report for a job target.
@@ -562,19 +568,22 @@ async def generate_trust_report(
         if not job_target:
             raise HTTPException(status_code=404, detail="Job target not found")
         
-        # Check if trust report already exists
+        # Check cache (unless forced)
         existing = await apply_storage.get_trust_report(conn, job_target_id)
-        if existing:
+        if existing and not force:
             return TrustReportResponse(
                 trust_report_id=str(existing["trust_report_id"]),
                 scam_risk=existing["scam_risk"],
-                scam_reasons=existing.get("scam_reasons", []),
+                scam_reasons=existing.get("scam_reasons", []) or [],
                 ghost_likelihood=existing["ghost_likelihood"],
-                ghost_reasons=existing.get("ghost_reasons", []),
+                ghost_reasons=existing.get("ghost_reasons", []) or [],
                 staleness_score=existing.get("staleness_score"),
                 staleness_reasons=existing.get("staleness_reasons"),
-                scam_score=None,  # Not stored in DB yet
-                ghost_score=None,  # Not stored in DB yet
+                scam_score=existing.get("scam_score"),
+                ghost_score=existing.get("ghost_score"),
+                apply_link_status=existing.get("apply_link_status"),
+                domain_consistency_reasons=existing.get("domain_consistency_reasons"),
+                trust_score=existing.get("trust_score"),
             )
         
         # Parse dates
@@ -589,6 +598,23 @@ async def generate_trust_report(
         # Get stored HTML if available
         stored_html = job_target.get("html")
         
+        # Get extracted_json for additional context
+        extracted_json = job_target.get("extracted_json")
+        if isinstance(extracted_json, str):
+            try:
+                extracted_json = json.loads(extracted_json)
+            except:
+                extracted_json = {}
+        elif extracted_json is None:
+            extracted_json = {}
+        
+        apply_url = extracted_json.get("apply_url") or job_target.get("apply_url")
+        company_website = extracted_json.get("company_website")
+        source = extracted_json.get("source")  # e.g., "jobscout", "remoteok"
+        
+        # Cached report for analyzer (optional)
+        cached_report = dict(existing) if (existing and not refresh_apply_link) else None
+        
         # Generate trust report
         report_data = await trust_analyzer.generate_trust_report(
             job_target_id=str(job_target_id),
@@ -597,6 +623,10 @@ async def generate_trust_report(
             posted_at=posted_at,
             expires_at=expires_at,
             html=stored_html,  # Use stored HTML if available
+            apply_url=apply_url,
+            company_website=company_website,
+            source=source,
+            cached_trust_report=cached_report,
         )
         
         # Save trust report
@@ -605,14 +635,18 @@ async def generate_trust_report(
             job_target_id=job_target_id,
             scam_risk=report_data["scam_risk"],
             scam_reasons=report_data["scam_reasons"],
+            scam_score=report_data.get("scam_score"),
             ghost_likelihood=report_data["ghost_likelihood"],
             ghost_reasons=report_data["ghost_reasons"],
+            ghost_score=report_data.get("ghost_score"),
             staleness_score=report_data["staleness_score"],
             staleness_reasons=report_data["staleness_reasons"],
             domain=report_data.get("domain"),
             extracted_emails=report_data.get("extracted_emails", []),
             extracted_phones=report_data.get("extracted_phones", []),
             apply_link_status=report_data.get("apply_link_status"),
+            domain_consistency_reasons=report_data.get("domain_consistency_reasons", []),
+            trust_score=report_data.get("trust_score"),
         )
         
         return TrustReportResponse(
@@ -623,32 +657,26 @@ async def generate_trust_report(
             ghost_reasons=trust_report.get("ghost_reasons", []),
             staleness_score=trust_report.get("staleness_score"),
             staleness_reasons=trust_report.get("staleness_reasons"),
-            scam_score=report_data.get("scam_score"),
-            ghost_score=report_data.get("ghost_score"),
+            scam_score=trust_report.get("scam_score") or report_data.get("scam_score"),
+            ghost_score=trust_report.get("ghost_score") or report_data.get("ghost_score"),
+            apply_link_status=trust_report.get("apply_link_status") or report_data.get("apply_link_status"),
+            domain_consistency_reasons=trust_report.get("domain_consistency_reasons") or report_data.get("domain_consistency_reasons"),
+            trust_score=trust_report.get("trust_score") or report_data.get("trust_score"),
         )
 
 
 @router.post("/pack/generate")
 async def generate_apply_pack(
     request: GeneratePackRequest,
-    user_id: UUID = Depends(get_user_id),
+    user_id: UUID = Depends(require_auth_user),
 ):
     """
     Generate an apply pack (tailored resume content, cover note, ATS checklist).
-    Checks quota before generating.
+    Checks rate limit and quota before generating.
     """
-    # #region agent log
-    _agent_log(
-        "generate_apply_pack:entry",
-        data={
-            "has_job_url": bool(request.job_url),
-            "has_job_text": bool(request.job_text),
-            "resume_text_len": len(request.resume_text or ""),
-            "use_ai": bool(request.use_ai),
-        },
-        hypothesis_id="H2_PACK_GENERATION",
-    )
-    # #endregion agent log
+    # Rate limit check (10 requests per minute per user)
+    check_rate_limit(user_id, apply_pack_limiter)
+    
     async with db.connection() as conn:
         # Check quota
         quota = await apply_storage.check_user_quota(conn, user_id, "apply_pack")
@@ -660,7 +688,7 @@ async def generate_apply_pack(
         
         # Get or create resume
         resume_hash = apply_storage.hash_resume(request.resume_text)
-        resume = await apply_storage.get_resume_by_hash(conn, resume_hash)
+        resume = await apply_storage.get_resume_by_hash(conn, user_id, resume_hash)
         if not resume:
             # Analyze resume first
             resume_analysis = await resume_analyzer.analyze_resume(request.resume_text, use_ai=request.use_ai)
@@ -767,7 +795,7 @@ async def generate_apply_pack(
         
         # Check if apply pack already exists (cached)
         pack_hash = apply_storage.hash_apply_pack(resume_hash, job_hash)
-        existing_pack = await apply_storage.get_apply_pack_by_hash(conn, pack_hash)
+        existing_pack = await apply_storage.get_apply_pack_by_hash(conn, user_id, pack_hash)
         
         if existing_pack and not request.use_ai:
             # Return cached version
@@ -815,6 +843,15 @@ async def generate_apply_pack(
         company_summary = extracted_json.get("ai_company_summary") or extracted_json.get("company_summary")
         company_website = extracted_json.get("company_website")
         
+        # Get learning context from past feedback
+        learning_context = None
+        if request.use_ai:
+            try:
+                learning_context = await learning_summary.build_learning_summary(user_id, limit=50)
+            except Exception as e:
+                # Don't fail if learning summary fails
+                print(f"Warning: Failed to build learning summary: {e}")
+        
         # Generate apply pack
         pack_data = await apply_pack_generator.generate_apply_pack(
             resume_text=request.resume_text,
@@ -826,22 +863,8 @@ async def generate_apply_pack(
             company_name=company_name,
             company_summary=company_summary,
             company_website=company_website,
+            learning_context=learning_context,
         )
-        # #region agent log
-        _agent_log(
-            "generate_apply_pack:pack_generated",
-            data={
-                "job_title_present": bool(job_title),
-                "company_name_present": bool(company_name),
-                "company_summary_present": bool(company_summary),
-                "company_website_present": bool(company_website),
-                "cover_note_len": len(pack_data.get("cover_note") or ""),
-                "tailored_summary_len": len(pack_data.get("tailored_summary") or ""),
-                "bullets_count": len(pack_data.get("tailored_bullets") or []),
-            },
-            hypothesis_id="H2_PACK_GENERATION",
-        )
-        # #endregion agent log
         
         # Convert UUIDs if needed (asyncpg returns UUID objects, not strings)
         resume_id_val = resume["resume_id"]
@@ -889,7 +912,7 @@ async def generate_apply_pack(
 @router.get("/pack/{apply_pack_id}")
 async def get_apply_pack(
     apply_pack_id: UUID,
-    user_id: UUID = Depends(get_user_id),
+    user_id: UUID = Depends(require_auth_user),
 ):
     """Get an apply pack by ID."""
     async with db.connection() as conn:
@@ -940,7 +963,7 @@ async def get_apply_pack(
 
 @router.get("/history")
 async def get_history(
-    user_id: UUID = Depends(get_user_id),
+    user_id: UUID = Depends(require_auth_user),
     limit: int = 50,
     offset: int = 0,
 ):
@@ -957,19 +980,18 @@ async def get_history(
 async def export_apply_pack_docx(
     apply_pack_id: UUID,
     format: str = "combined",  # "resume", "cover", or "combined"
-    user_id: UUID = Depends(get_user_id),
+    user_id: UUID = Depends(require_auth_user),
 ):
     """
-    Export apply pack as DOCX file.
+    Export apply pack as downloadable file.
+    
+    Formats:
+    - "resume": Single DOCX with tailored resume
+    - "cover": Single DOCX with personalized cover letter
+    - "combined": ZIP file containing both resume.docx and cover_letter.docx
+    
     Paid feature only.
     """
-    # #region agent log
-    _agent_log(
-        "export_apply_pack_docx:entry",
-        data={"format": format, "apply_pack_id": str(apply_pack_id)},
-        hypothesis_id="H3_EXPORTS",
-    )
-    # #endregion agent log
     async with db.connection() as conn:
         # Check quota (paid only)
         quota = await apply_storage.check_user_quota(conn, user_id, "docx_export")
@@ -1005,52 +1027,70 @@ async def export_apply_pack_docx(
         elif tailored_bullets is None:
             tailored_bullets = []
         
-        # Generate DOCX
+        # Generate files
         try:
             from backend.app.services import docx_generator
+            
+            # Parse resume to extract applicant info for cover letter
+            resume_text = apply_pack.get("resume_text", "")
+            parsed_resume = docx_generator._parse_resume_into_structure(resume_text) if resume_text else {}
+            
+            # Extract applicant contact info
+            applicant_name = parsed_resume.get('name', '')
+            applicant_location = parsed_resume.get('location', '')
+            applicant_email = None
+            applicant_phone = None
+            applicant_linkedin = None
+            
+            for contact in parsed_resume.get('contact', []):
+                if contact.get('type') == 'email' and not applicant_email:
+                    applicant_email = contact.get('value')
+                elif contact.get('type') == 'phone' and not applicant_phone:
+                    applicant_phone = contact.get('value')
+                elif contact.get('type') == 'linkedin' and not applicant_linkedin:
+                    applicant_linkedin = contact.get('url', contact.get('value'))
             
             if format == "resume":
                 buffer = docx_generator.generate_resume_docx(
                     tailored_summary=apply_pack.get("tailored_summary", ""),
                     tailored_bullets=tailored_bullets,
-                    original_resume_text=apply_pack.get("resume_text"),
+                    original_resume_text=resume_text,
                 )
                 filename = "tailored_resume.docx"
+                media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                
             elif format == "cover":
                 buffer = docx_generator.generate_cover_note_docx(
                     cover_note=apply_pack.get("cover_note", ""),
                     job_title=apply_pack.get("title"),
                     company_name=apply_pack.get("company"),
+                    applicant_name=applicant_name,
+                    applicant_email=applicant_email,
+                    applicant_phone=applicant_phone,
+                    applicant_location=applicant_location,
+                    applicant_linkedin=applicant_linkedin,
                 )
-                filename = "cover_note.docx"
-            else:  # combined
-                buffer = docx_generator.generate_combined_docx(
+                filename = "cover_letter.docx"
+                media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                
+            else:  # combined - returns ZIP file
+                buffer = docx_generator.generate_apply_pack_zip(
                     tailored_summary=apply_pack.get("tailored_summary", ""),
                     tailored_bullets=tailored_bullets,
                     cover_note=apply_pack.get("cover_note", ""),
                     job_title=apply_pack.get("title"),
                     company_name=apply_pack.get("company"),
+                    original_resume_text=resume_text,
                 )
-                filename = "apply_pack.docx"
+                filename = "apply_pack.zip"
+                media_type = "application/zip"
 
-            # #region agent log
-            _agent_log(
-                "export_apply_pack_docx:generated",
-                data={
-                    "format": format,
-                    "resume_text_present": bool(apply_pack.get("resume_text")),
-                    "cover_note_len": len(apply_pack.get("cover_note") or ""),
-                },
-                hypothesis_id="H3_EXPORTS",
-            )
-            # #endregion agent log
-            
             # Record usage
             await apply_storage.record_usage(conn, user_id, "docx_export", apply_pack_id)
             
             return StreamingResponse(
                 buffer,
-                media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                media_type=media_type,
                 headers={"Content-Disposition": f'attachment; filename="{filename}"'}
             )
             
@@ -1060,33 +1100,37 @@ async def export_apply_pack_docx(
                 detail="DOCX export not available. python-docx package not installed."
             )
         except Exception as e:
-            raise HTTPException(status_code=500, detail=f"Failed to generate DOCX: {str(e)}")
+            raise HTTPException(status_code=500, detail=f"Failed to generate export: {str(e)}")
 
 
 @router.post("/application")
 async def create_application(
-    apply_pack_id: Optional[UUID] = None,
-    job_target_id: Optional[UUID] = None,
-    status: str = "applied",
-    notes: Optional[str] = None,
-    reminder_at: Optional[datetime] = None,
-    user_id: UUID = Depends(get_user_id),
+    request: CreateApplicationRequest,
+    user_id: UUID = Depends(require_auth_user),
 ):
-    """Create a tracked application."""
+    """Create a tracked application. Checks tracking quota for free users."""
     async with db.connection() as conn:
+        # Check tracking quota (free users have limited active applications)
+        quota = await apply_storage.check_user_quota(conn, user_id, "tracking")
+        if not quota["allowed"]:
+            raise HTTPException(
+                status_code=403,
+                detail=f"Tracking limit reached. {quota.get('used', 0)}/{quota.get('limit', 0)} active applications. Upgrade to track unlimited applications."
+            )
+        
         # Verify ownership if IDs provided
-        if apply_pack_id:
+        if request.apply_pack_id:
             pack = await conn.fetchrow(
                 "SELECT user_id FROM apply_packs WHERE apply_pack_id = $1",
-                apply_pack_id
+                request.apply_pack_id
             )
             if not pack or pack["user_id"] != user_id:
                 raise HTTPException(status_code=404, detail="Apply pack not found")
         
-        if job_target_id:
+        if request.job_target_id:
             job = await conn.fetchrow(
                 "SELECT user_id FROM job_targets WHERE job_target_id = $1",
-                job_target_id
+                request.job_target_id
             )
             if job and job["user_id"] != user_id:
                 raise HTTPException(status_code=404, detail="Job target not found")
@@ -1094,11 +1138,11 @@ async def create_application(
         application = await apply_storage.create_application(
             conn,
             user_id=user_id,
-            apply_pack_id=apply_pack_id,
-            job_target_id=job_target_id,
-            status=status,
-            notes=notes,
-            reminder_at=reminder_at,
+            apply_pack_id=request.apply_pack_id,
+            job_target_id=request.job_target_id,
+            status=request.status,
+            notes=request.notes,
+            reminder_at=request.reminder_at,
         )
         
         return {
@@ -1113,7 +1157,7 @@ async def get_applications(
     status: Optional[str] = None,
     limit: int = 50,
     offset: int = 0,
-    user_id: UUID = Depends(get_user_id),
+    user_id: UUID = Depends(require_auth_user),
 ):
     """Get user's tracked applications."""
     async with db.connection() as conn:
@@ -1146,10 +1190,8 @@ async def get_applications(
 @router.put("/application/{application_id}")
 async def update_application(
     application_id: UUID,
-    status: Optional[str] = None,
-    notes: Optional[str] = None,
-    reminder_at: Optional[datetime] = None,
-    user_id: UUID = Depends(get_user_id),
+    request: UpdateApplicationRequest,
+    user_id: UUID = Depends(require_auth_user),
 ):
     """Update a tracked application."""
     async with db.connection() as conn:
@@ -1166,17 +1208,38 @@ async def update_application(
         values = []
         param_idx = 1
         
-        if status is not None:
+        # If status is changing, automatically set timeline timestamps (unless explicitly provided later)
+        new_status = request.status
+        now = datetime.utcnow()
+
+        if request.status is not None:
             updates.append(f"status = ${param_idx}")
-            values.append(status)
+            values.append(request.status)
             param_idx += 1
-        if notes is not None:
+        if request.notes is not None:
             updates.append(f"notes = ${param_idx}")
-            values.append(notes)
+            values.append(request.notes)
             param_idx += 1
-        if reminder_at is not None:
+        if request.reminder_at is not None:
             updates.append(f"reminder_at = ${param_idx}")
-            values.append(reminder_at)
+            values.append(request.reminder_at)
+            param_idx += 1
+
+        if new_status == "interview":
+            updates.append(f"interview_at = COALESCE(interview_at, ${param_idx})")
+            values.append(now)
+            param_idx += 1
+        elif new_status == "offer":
+            updates.append(f"offer_at = COALESCE(offer_at, ${param_idx})")
+            values.append(now)
+            param_idx += 1
+        elif new_status == "rejected":
+            updates.append(f"rejected_at = COALESCE(rejected_at, ${param_idx})")
+            values.append(now)
+            param_idx += 1
+        elif new_status == "applied":
+            updates.append(f"applied_at = COALESCE(applied_at, ${param_idx})")
+            values.append(now)
             param_idx += 1
         
         if not updates:
@@ -1202,9 +1265,9 @@ async def update_application(
 
 @router.get("/quota")
 async def get_quota(
-    user_id: UUID = Depends(get_user_id),
+    user_id: UUID = Depends(require_auth_user),
 ):
-    """Get user's current quota status."""
+    """Get user's current quota status including apply packs, exports, and tracking."""
     async with db.connection() as conn:
         user = await apply_storage.get_user(conn, user_id)
         if not user:
@@ -1212,9 +1275,139 @@ async def get_quota(
         
         apply_pack_quota = await apply_storage.check_user_quota(conn, user_id, "apply_pack")
         docx_quota = await apply_storage.check_user_quota(conn, user_id, "docx_export")
+        tracking_quota = await apply_storage.check_user_quota(conn, user_id, "tracking")
         
         return {
             "plan": user.get("plan", "free"),
+            "subscription_status": user.get("subscription_status"),
             "apply_packs": apply_pack_quota,
             "docx_export": docx_quota,
+            "tracking": tracking_quota,
         }
+
+
+@router.post("/application/{application_id}/feedback")
+async def create_application_feedback(
+    application_id: UUID,
+    request: ApplicationFeedbackRequest,
+    user_id: UUID = Depends(require_auth_user),
+):
+    """Store feedback for an application (rejection, shortlist, offer, etc.)."""
+    async with db.connection() as conn:
+        # Verify ownership
+        app = await conn.fetchrow(
+            "SELECT user_id FROM applications WHERE application_id = $1",
+            application_id
+        )
+        if not app or app["user_id"] != user_id:
+            raise HTTPException(status_code=404, detail="Application not found")
+        
+        # Parse feedback heuristically if not provided
+        parsed_json = request.parsed_json
+        if not parsed_json and request.raw_text:
+            parsed_json = _parse_feedback_heuristic(request.raw_text, request.feedback_type)
+        
+        # Store feedback
+        feedback = await apply_storage.create_application_feedback(
+            conn,
+            application_id=application_id,
+            feedback_type=request.feedback_type,
+            raw_text=request.raw_text,
+            parsed_json=parsed_json,
+        )
+        
+        # Parse JSON if stored as string
+        parsed_data = feedback.get("parsed_json")
+        if isinstance(parsed_data, str):
+            try:
+                parsed_data = json.loads(parsed_data)
+            except:
+                parsed_data = {}
+        elif parsed_data is None:
+            parsed_data = {}
+        
+        return {
+            "feedback_id": str(feedback["feedback_id"]),
+            "feedback_type": feedback["feedback_type"],
+            "raw_text": feedback.get("raw_text"),
+            "parsed_json": parsed_data,
+            "created_at": feedback["created_at"].isoformat() if feedback.get("created_at") else None,
+        }
+
+
+@router.get("/application/{application_id}/feedback")
+async def get_application_feedback(
+    application_id: UUID,
+    user_id: UUID = Depends(require_auth_user),
+):
+    """Get all feedback for an application."""
+    async with db.connection() as conn:
+        # Verify ownership
+        app = await conn.fetchrow(
+            "SELECT user_id FROM applications WHERE application_id = $1",
+            application_id
+        )
+        if not app or app["user_id"] != user_id:
+            raise HTTPException(status_code=404, detail="Application not found")
+        
+        feedback_list = await apply_storage.get_application_feedback(conn, application_id)
+        
+        # Parse JSON fields
+        result = []
+        for fb in feedback_list:
+            parsed_data = fb.get("parsed_json")
+            if isinstance(parsed_data, str):
+                try:
+                    parsed_data = json.loads(parsed_data)
+                except:
+                    parsed_data = {}
+            elif parsed_data is None:
+                parsed_data = {}
+            
+            result.append({
+                "feedback_id": str(fb["feedback_id"]),
+                "feedback_type": fb["feedback_type"],
+                "raw_text": fb.get("raw_text"),
+                "parsed_json": parsed_data,
+                "created_at": fb["created_at"].isoformat() if fb.get("created_at") else None,
+            })
+        
+        return {"feedback": result}
+
+
+def _parse_feedback_heuristic(raw_text: str, feedback_type: str) -> dict:
+    """Heuristically parse feedback text into structured data."""
+    text_lower = raw_text.lower()
+    
+    # Reason categories
+    reason_categories = []
+    signals = []
+    
+    # Common rejection reasons
+    if "senior" in text_lower or "seniority" in text_lower:
+        reason_categories.append("seniority")
+    if "skill" in text_lower and ("gap" in text_lower or "missing" in text_lower):
+        reason_categories.append("skills_gap")
+    if "sponsor" in text_lower or "visa" in text_lower:
+        reason_categories.append("sponsorship")
+    if "location" in text_lower or "remote" in text_lower:
+        reason_categories.append("location")
+    if "compensation" in text_lower or "salary" in text_lower or "budget" in text_lower:
+        reason_categories.append("comp")
+    if "experience" in text_lower and ("years" in text_lower or "level" in text_lower):
+        reason_categories.append("experience_level")
+    
+    # Extract keywords/signals
+    keywords = ["python", "javascript", "react", "node", "aws", "docker", "kubernetes",
+                "leadership", "management", "team", "agile", "scrum"]
+    for keyword in keywords:
+        if keyword in text_lower:
+            signals.append(keyword)
+    
+    decision = feedback_type  # Use feedback_type as decision
+    
+    return {
+        "decision": decision,
+        "reason_categories": reason_categories,
+        "signals": signals[:10],  # Limit to 10
+    }

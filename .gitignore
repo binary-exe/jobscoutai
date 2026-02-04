@@ -73,3 +73,5 @@ htmlcov/
 
 # Build artifacts
 *.whl
+.vercel
+.env*.local

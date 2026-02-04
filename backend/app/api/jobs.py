@@ -10,6 +10,7 @@ from pydantic import BaseModel, Field
 
 from backend.app.core.config import Settings, get_settings
 from backend.app.core.database import db
+from backend.app.core.auth import AuthUser, get_optional_user
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -80,10 +81,11 @@ async def list_jobs(
     source: Optional[str] = Query(None, description="Source filter"),
     posted_since: Optional[int] = Query(None, description="Posted within N days"),
     min_score: Optional[float] = Query(None, description="Minimum AI score (0-100)"),
-    sort: str = Query("ai_score", description="Sort by: ai_score, posted_at, first_seen_at"),
+    sort: str = Query("ai_score", description="Sort by: ai_score, posted_at, first_seen_at, personalized"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
     settings: Settings = Depends(get_settings),
+    auth_user: AuthUser | None = Depends(get_optional_user),
 ):
     """
     List jobs with filtering and pagination.
@@ -96,7 +98,7 @@ async def list_jobs(
 
     return await _list_jobs_postgres(
         q, location, remote, employment, source, posted_since,
-        min_score, sort, page, page_size, settings
+        min_score, sort, page, page_size, settings, auth_user
     )
 
 
@@ -218,7 +220,7 @@ async def _get_job_sqlite(job_id: str, settings) -> JobDetailResponse:
 
 async def _list_jobs_postgres(
     q, location, remote, employment, source, posted_since,
-    min_score, sort, page, page_size, settings
+    min_score, sort, page, page_size, settings, auth_user: AuthUser | None
 ) -> JobListResponse:
     """List jobs from Postgres."""
     where_clauses = ["1=1"]
@@ -263,17 +265,94 @@ async def _list_jobs_postgres(
 
     where_sql = " AND ".join(where_clauses)
 
-    sort_map = {
-        "ai_score": "COALESCE(ai_score, 0) DESC",
-        "posted_at": "posted_at DESC NULLS LAST",
-        "first_seen_at": "first_seen_at DESC",
-    }
-    order_sql = sort_map.get(sort, "COALESCE(ai_score, 0) DESC")
+    # Count params must match WHERE placeholders only
+    count_params = list(params)
 
     async with db.connection() as conn:
+        # Personalized sort requires auth + profile embedding
+        if sort == "personalized":
+            if not auth_user:
+                raise HTTPException(status_code=401, detail="Login required for personalized ranking")
+            if not settings.embeddings_enabled:
+                raise HTTPException(status_code=400, detail="Personalized ranking is disabled")
+
+            from backend.app.storage import apply_storage
+            from backend.app.services import embeddings as emb
+
+            # Fetch profile
+            profile = await apply_storage.get_user_profile(conn, auth_user.user_id)
+            if not profile:
+                raise HTTPException(status_code=400, detail="Create your profile to enable personalized ranking")
+
+            primary_resume_text = ""
+            primary_resume_id = profile.get("primary_resume_id")
+            if primary_resume_id:
+                rv = await apply_storage.get_resume_version(conn, auth_user.user_id, primary_resume_id)
+                if rv:
+                    primary_resume_text = (rv.get("resume_text") or "").strip()
+
+            profile_text = emb.build_profile_embedding_text(profile, primary_resume_text=primary_resume_text)
+            if not profile_text:
+                raise HTTPException(status_code=400, detail="Profile is empty; add skills or upload a resume")
+
+            profile_hash = emb.hash_text_for_embedding(profile_text)
+
+            # If we already have embedding+hash, reuse
+            profile_embedding_exists = False
+            try:
+                profile_embedding_exists = profile.get("embedding") is not None and profile.get("profile_embedding_hash") == profile_hash
+            except Exception:
+                profile_embedding_exists = False
+
+            profile_embedding_literal: str | None = None
+            if profile_embedding_exists:
+                # We don't rely on decoding existing vector; we just compute again if needed.
+                profile_embedding_literal = None
+
+            if not profile_embedding_exists:
+                result = await emb.embed_text(profile_text)
+                if not result.ok or not result.embedding:
+                    raise HTTPException(status_code=500, detail="Failed to build profile embedding")
+                profile_embedding_literal = emb.to_pgvector_literal(result.embedding)
+                # Best-effort persist; if columns missing, ignore (will be caught by query anyway)
+                try:
+                    await conn.execute(
+                        """
+                        UPDATE user_profiles
+                        SET embedding = $2::vector, profile_embedding_hash = $3, updated_at = NOW()
+                        WHERE user_id = $1
+                        """,
+                        auth_user.user_id,
+                        profile_embedding_literal,
+                        profile_hash,
+                    )
+                except Exception:
+                    pass
+            else:
+                # Even if cached, we still need an embedding literal for the ORDER BY.
+                # For now, recompute (keeps code simple; can be optimized later).
+                result = await emb.embed_text(profile_text)
+                if not result.ok or not result.embedding:
+                    raise HTTPException(status_code=500, detail="Failed to build profile embedding")
+                profile_embedding_literal = emb.to_pgvector_literal(result.embedding)
+
+            # Add the embedding param AFTER count (so count params remain valid)
+            personalized_param_idx = param_idx
+            params.append(profile_embedding_literal)
+            param_idx += 1
+
+            order_sql = f"(embedding <=> ${personalized_param_idx}::vector) ASC NULLS LAST, posted_at DESC NULLS LAST"
+        else:
+            sort_map = {
+                "ai_score": "COALESCE(ai_score, 0) DESC",
+                "posted_at": "posted_at DESC NULLS LAST",
+                "first_seen_at": "first_seen_at DESC",
+            }
+            order_sql = sort_map.get(sort, "COALESCE(ai_score, 0) DESC")
+
         # Count
         count_sql = f"SELECT COUNT(*) FROM jobs WHERE {where_sql}"
-        total = await conn.fetchval(count_sql, *params)
+        total = await conn.fetchval(count_sql, *count_params)
 
         # Fetch
         offset = (page - 1) * page_size

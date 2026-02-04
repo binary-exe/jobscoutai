@@ -1,4 +1,5 @@
 import { Suspense } from 'react';
+import Link from 'next/link';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { SearchBar } from '@/components/SearchBar';
@@ -6,8 +7,9 @@ import { Filters } from '@/components/Filters';
 import { JobCard, JobCardSkeleton } from '@/components/JobCard';
 import { Pagination } from '@/components/Pagination';
 import { Stats } from '@/components/Stats';
+import { PersonalizedJobs } from '@/components/PersonalizedJobs';
 import { getJobs, getStats, type SearchParams } from '@/lib/api';
-import { Sparkles } from 'lucide-react';
+import { Sparkles, ArrowRight, FileText, Shield, Clock } from 'lucide-react';
 
 interface PageProps {
   searchParams: {
@@ -22,6 +24,8 @@ interface PageProps {
 }
 
 export default async function HomePage({ searchParams }: PageProps) {
+  const isPersonalized = searchParams.sort === 'personalized';
+
   const params: SearchParams = {
     q: searchParams.q,
     location: searchParams.location,
@@ -35,7 +39,9 @@ export default async function HomePage({ searchParams }: PageProps) {
 
   // Fetch data in parallel
   const [jobsData, stats] = await Promise.all([
-    getJobs(params).catch(() => ({ jobs: [], total: 0, page: 1, page_size: 20, has_more: false })),
+    isPersonalized
+      ? Promise.resolve({ jobs: [], total: 0, page: params.page || 1, page_size: params.page_size || 20, has_more: false })
+      : getJobs(params).catch(() => ({ jobs: [], total: 0, page: 1, page_size: 20, has_more: false })),
     getStats().catch(() => ({ total_jobs: 0, jobs_last_24h: 0, jobs_last_7d: 0, sources: {}, last_run_jobs_new: 0 })),
   ]);
 
@@ -76,6 +82,41 @@ export default async function HomePage({ searchParams }: PageProps) {
           </div>
         </section>
         
+        {/* Apply Workspace CTA - Activation Flow */}
+        <section className="border-b border-border/40 py-8 bg-primary/5">
+          <div className="container mx-auto max-w-5xl px-4">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-6 rounded-xl border border-primary/20 bg-background p-6">
+              <div className="flex-1 text-center md:text-left">
+                <h2 className="text-lg font-semibold">Get interview-ready in 2 minutes</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Paste a job link + your resume → Get tailored cover letter, ATS tips, and trust report
+                </p>
+                <div className="mt-3 flex flex-wrap items-center justify-center md:justify-start gap-4 text-xs text-muted-foreground">
+                  <span className="flex items-center gap-1">
+                    <FileText className="h-3.5 w-3.5" />
+                    AI-tailored cover letter
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Shield className="h-3.5 w-3.5" />
+                    Trust Report included
+                  </span>
+                  <span className="flex items-center gap-1">
+                    <Clock className="h-3.5 w-3.5" />
+                    Save 45+ mins
+                  </span>
+                </div>
+              </div>
+              <Link
+                href="/apply"
+                className="shrink-0 inline-flex items-center gap-2 rounded-lg bg-primary px-5 py-2.5 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
+              >
+                Try Apply Workspace Free
+                <ArrowRight className="h-4 w-4" />
+              </Link>
+            </div>
+          </div>
+        </section>
+        
         {/* Jobs Section */}
         <section className="py-8">
           <div className="container mx-auto max-w-5xl px-4">
@@ -91,36 +132,42 @@ export default async function HomePage({ searchParams }: PageProps) {
               
               {/* Job List */}
               <div className="flex-1 min-w-0">
-                <div className="mb-4 flex items-center justify-between">
-                  <p className="text-sm text-muted-foreground">
-                    {jobsData.total.toLocaleString()} jobs found
-                  </p>
-                </div>
-                
-                {jobsData.jobs.length > 0 ? (
+                {isPersonalized ? (
+                  <PersonalizedJobs params={params} />
+                ) : (
                   <>
-                    <div className="space-y-4">
-                      {jobsData.jobs.map((job, index) => (
-                        <div
-                          key={job.job_id}
-                          className="animate-fade-in"
-                          style={{ animationDelay: `${index * 50}ms` }}
-                        >
-                          <JobCard job={job} />
-                        </div>
-                      ))}
+                    <div className="mb-4 flex items-center justify-between">
+                      <p className="text-sm text-muted-foreground">
+                        {jobsData.total.toLocaleString()} jobs found
+                      </p>
                     </div>
                     
-                    <div className="mt-8">
-                      <Pagination
-                        currentPage={jobsData.page}
-                        totalPages={totalPages}
-                        hasMore={jobsData.has_more}
-                      />
-                    </div>
+                    {jobsData.jobs.length > 0 ? (
+                      <>
+                        <div className="space-y-4">
+                          {jobsData.jobs.map((job, index) => (
+                            <div
+                              key={job.job_id}
+                              className="animate-fade-in"
+                              style={{ animationDelay: `${index * 50}ms` }}
+                            >
+                              <JobCard job={job} />
+                            </div>
+                          ))}
+                        </div>
+                        
+                        <div className="mt-8">
+                          <Pagination
+                            currentPage={jobsData.page}
+                            totalPages={totalPages}
+                            hasMore={jobsData.has_more}
+                          />
+                        </div>
+                      </>
+                    ) : (
+                      <EmptyState />
+                    )}
                   </>
-                ) : (
-                  <EmptyState />
                 )}
               </div>
             </div>

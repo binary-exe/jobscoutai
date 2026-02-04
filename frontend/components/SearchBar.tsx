@@ -4,6 +4,7 @@ import { Search, X } from 'lucide-react';
 import { useRouter, useSearchParams } from 'next/navigation';
 import { useState, useCallback, useTransition } from 'react';
 import { cn } from '@/lib/utils';
+import { trackEvent } from '@/lib/analytics';
 
 interface SearchBarProps {
   className?: string;
@@ -28,6 +29,17 @@ export function SearchBar({ className }: SearchBarProps) {
     }
 
     params.set('page', '1');
+    
+    if (query?.trim()) {
+      trackEvent('job_search_performed', {
+        query: query.trim(),
+        filters: {
+          location: searchParams.get('location') || undefined,
+          remote: searchParams.get('remote') || undefined,
+          employment: searchParams.get('employment') || undefined,
+        },
+      });
+    }
     
     startTransition(() => {
       router.push(`/?${params.toString()}`);

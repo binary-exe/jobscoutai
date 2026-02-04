@@ -8,8 +8,10 @@ from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse, parse_qs
 from datetime import datetime, timezone
 import re
+import unicodedata
 
 from bs4 import BeautifulSoup
+from jobscout.fetchers.http import HttpFetcher
 
 
 # Scam indicators
@@ -24,6 +26,28 @@ SUSPICIOUS_KEYWORDS = [
     "upfront fee", "registration fee", "processing fee",
     "send money", "wire transfer", "western union", "moneygram",
     "crypto", "bitcoin", "ethereum", "paypal friends",
+]
+
+# Source-aware anti-spam tokens (legitimate boards use these, so down-weight them)
+KNOWN_LEGITIMATE_TOKENS = {
+    "remoteok": ["verify you're human", "remoteok verification"],
+    "weworkremotely": ["weworkremotely"],
+    "remotive": ["remotive"],
+}
+
+# Common boilerplate footers to strip
+BOILERPLATE_FOOTERS = [
+    r"equal opportunity employer",
+    r"diversity.*inclusion",
+    r"we are an equal opportunity",
+    r"all qualified applicants",
+    r"we do not discriminate",
+    r"eoe.*aa",
+    r"follow us on",
+    r"connect with us",
+    r"privacy policy",
+    r"terms of service",
+    r"cookie policy",
 ]
 
 SCAM_PATTERNS = [
@@ -75,6 +99,34 @@ def extract_phones(text: str) -> List[str]:
     return phones
 
 
+def normalize_text(text: str) -> str:
+    """Normalize unicode and strip boilerplate."""
+    if not text:
+        return ""
+    # Normalize unicode
+    text = unicodedata.normalize('NFKD', text)
+    # Strip common boilerplate footers
+    text_lower = text.lower()
+    for pattern in BOILERPLATE_FOOTERS:
+        text_lower = re.sub(pattern, "", text_lower, flags=re.IGNORECASE)
+    return text.strip()
+
+
+def extract_domain(url: Optional[str]) -> Optional[str]:
+    """Extract domain from URL."""
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+        domain = parsed.netloc.lower()
+        # Remove www. prefix for consistency
+        if domain.startswith("www."):
+            domain = domain[4:]
+        return domain
+    except Exception:
+        return None
+
+
 def check_suspicious_links(text: str, html: Optional[str] = None) -> List[str]:
     """Check for suspicious links (WhatsApp, Telegram, etc.)."""
     suspicious = []
@@ -106,6 +158,7 @@ def analyze_scam_risk(
     html: Optional[str] = None,
     extracted_emails: Optional[List[str]] = None,
     extracted_phones: Optional[List[str]] = None,
+    source: Optional[str] = None,
 ) -> Dict[str, Any]:
     """
     Analyze scam risk signals.
@@ -120,15 +173,25 @@ def analyze_scam_risk(
     reasons = []
     score = 0
     
-    text = (description_text or "").lower()
-    text_full = text
+    # Normalize and clean text
+    text = normalize_text(description_text or "")
+    text_lower = text.lower()
+    
+    # Source-aware heuristics: down-weight known legitimate tokens
+    source_weight = 1.0
+    if source and source.lower() in KNOWN_LEGITIMATE_TOKENS:
+        legitimate_tokens = KNOWN_LEGITIMATE_TOKENS[source.lower()]
+        for token in legitimate_tokens:
+            if token in text_lower:
+                source_weight = 0.5  # Reduce weight for known legitimate sources
+                break
     
     # Check for suspicious keywords
     found_keywords = []
     for keyword in SUSPICIOUS_KEYWORDS:
-        if keyword in text:
+        if keyword in text_lower:
             found_keywords.append(keyword)
-            score += 5
+            score += int(5 * source_weight)  # Apply source weight
     
     if found_keywords:
         reasons.append(f"Suspicious keywords found: {', '.join(found_keywords[:3])}")
@@ -362,18 +425,33 @@ def analyze_staleness(
     }
 
 
-async def _test_apply_link(job_url: Optional[str]) -> str:
+async def _test_apply_link(
+    job_url: Optional[str],
+    apply_url: Optional[str] = None,
+    cache_result: Optional[Dict[str, Any]] = None,
+) -> str:
     """
     Test if apply link is valid by making HTTP request.
+    Tests apply_url if provided, otherwise job_url.
+    Uses cache if available to avoid repeated checks.
     
     Returns: "valid", "broken", or "missing"
     """
-    if not job_url:
+    # Prefer apply_url over job_url
+    url_to_test = apply_url or job_url
+    if not url_to_test:
         return "missing"
     
+    # Check cache first (if provided)
+    if cache_result and "apply_link_status" in cache_result:
+        cached_status = cache_result.get("apply_link_status")
+        if cached_status in ["valid", "broken", "missing"]:
+            return cached_status
+    
+    # Test the URL with timeout and capped retries
     try:
         async with HttpFetcher(timeout_s=5, max_retries=1) as fetcher:
-            result = await fetcher.fetch(job_url, use_cache=False)
+            result = await fetcher.fetch(url_to_test, use_cache=False)
             
             if result.ok and result.status < 400:
                 return "valid"
@@ -381,7 +459,7 @@ async def _test_apply_link(job_url: Optional[str]) -> str:
                 return "broken"
             else:
                 return "broken"
-    except Exception as e:
+    except Exception:
         # Timeout, connection error, etc.
         return "broken"
 
@@ -393,6 +471,10 @@ async def generate_trust_report(
     posted_at: Optional[datetime] = None,
     expires_at: Optional[datetime] = None,
     html: Optional[str] = None,
+    apply_url: Optional[str] = None,
+    company_website: Optional[str] = None,
+    source: Optional[str] = None,
+    cached_trust_report: Optional[Dict[str, Any]] = None,
 ) -> Dict[str, Any]:
     """
     Generate a complete trust report for a job target.
@@ -412,19 +494,32 @@ async def generate_trust_report(
     emails = extract_emails(description_text or "")
     phones = extract_phones(description_text or "")
     
-    # Extract domain from URL
-    domain = None
-    if job_url:
-        parsed = urlparse(job_url)
-        domain = parsed.netloc
+    # Extract domains
+    job_domain = extract_domain(job_url)
+    apply_domain = extract_domain(apply_url)
+    company_domain = extract_domain(company_website)
     
-    # Analyze each aspect
+    # Company/apply domain consistency check
+    domain_mismatch_reasons = []
+    domain_consistency_score = 100  # Start at 100, deduct for mismatches
+    
+    if company_domain and apply_domain:
+        if company_domain != apply_domain:
+            domain_mismatch_reasons.append(f"Company website domain ({company_domain}) differs from apply URL domain ({apply_domain})")
+            domain_consistency_score -= 30
+    elif company_domain and job_domain:
+        if company_domain != job_domain:
+            domain_mismatch_reasons.append(f"Company website domain ({company_domain}) differs from job URL domain ({job_domain})")
+            domain_consistency_score -= 20
+    
+    # Analyze each aspect (with source-aware heuristics)
     scam_analysis = analyze_scam_risk(
         job_url=job_url,
         description_text=description_text,
         html=html,
         extracted_emails=emails,
         extracted_phones=phones,
+        source=source,
     )
     
     ghost_analysis = analyze_ghost_likelihood(
@@ -441,8 +536,29 @@ async def generate_trust_report(
         html=html,
     )
     
-    # Test apply link status
-    apply_link_status = await _test_apply_link(job_url)
+    # Test apply link status (with caching)
+    apply_link_status = await _test_apply_link(
+        job_url=job_url,
+        apply_url=apply_url,
+        cache_result=cached_trust_report,
+    )
+    
+    # Calculate overall trust score (0-100, higher = more trustworthy)
+    # Invert component scores so higher = better
+    scam_inverted = 100 - min(100, scam_analysis["score"])
+    ghost_inverted = 100 - min(100, ghost_analysis["score"])
+    staleness_inverted = 100 - min(100, staleness_analysis["score"])
+    link_score = 100 if apply_link_status == "valid" else (50 if apply_link_status == "missing" else 0)
+    
+    # Weighted average
+    trust_score = (
+        (scam_inverted * 0.35) +  # Scam risk is most important
+        (ghost_inverted * 0.25) +  # Ghost likelihood
+        (staleness_inverted * 0.20) +  # Staleness
+        (link_score * 0.10) +  # Link health
+        (domain_consistency_score * 0.10)  # Domain consistency
+    )
+    trust_score = max(0, min(100, int(trust_score)))
     
     return {
         "scam_risk": scam_analysis["risk"],
@@ -453,8 +569,10 @@ async def generate_trust_report(
         "ghost_score": ghost_analysis["score"],
         "staleness_score": staleness_analysis["score"],
         "staleness_reasons": staleness_analysis["reasons"],
-        "domain": domain,
+        "domain": job_domain,
         "extracted_emails": emails[:5],  # Limit to 5
         "extracted_phones": phones[:3],  # Limit to 3
         "apply_link_status": apply_link_status,
+        "domain_consistency_reasons": domain_mismatch_reasons,
+        "trust_score": trust_score,  # Overall trust score (0-100, higher = better)
     }

@@ -175,14 +175,21 @@ async def trigger_scrape_run(
 
     # If using Postgres, sync from temp SQLite to Postgres
     if not settings.use_sqlite and os.path.exists(db_path):
-        await _sync_to_postgres(db_path)
+        new_job_count = await _sync_to_postgres(db_path)
         os.remove(db_path)
+        
+        # Auto-backfill embeddings for new jobs (for personalized ranking)
+        await _backfill_embeddings_for_new_jobs(new_job_count)
 
     return stats
 
 
-async def _sync_to_postgres(sqlite_path: str) -> None:
-    """Sync jobs from SQLite to Postgres."""
+async def _sync_to_postgres(sqlite_path: str) -> int:
+    """
+    Sync jobs from SQLite to Postgres.
+    
+    Returns the number of new jobs inserted.
+    """
     import sqlite3
     from backend.app.core.database import db
     from backend.app.storage.postgres import upsert_job_from_dict
@@ -193,9 +200,41 @@ async def _sync_to_postgres(sqlite_path: str) -> None:
     rows = conn.execute("SELECT * FROM jobs").fetchall()
     conn.close()
 
+    new_count = 0
     async with db.connection() as pg_conn:
         for row in rows:
-            await upsert_job_from_dict(pg_conn, dict(row))
+            is_new, _ = await upsert_job_from_dict(pg_conn, dict(row))
+            if is_new:
+                new_count += 1
+    
+    return new_count
+
+
+async def _backfill_embeddings_for_new_jobs(new_job_count: int) -> None:
+    """
+    Backfill embeddings for newly added jobs after a scrape run.
+    
+    This ensures personalized ranking stays up-to-date without manual intervention.
+    """
+    if new_job_count == 0:
+        return
+    
+    settings = get_settings()
+    if not settings.embeddings_enabled:
+        return
+    
+    try:
+        from backend.app.services.embeddings import backfill_new_job_embeddings
+        
+        # Backfill slightly more than new_count to catch any missed jobs
+        limit = min(new_job_count + 10, 100)
+        updated, skipped = await backfill_new_job_embeddings(limit=limit)
+        
+        if updated > 0:
+            print(f"[Embeddings] Auto-backfilled {updated} job embeddings ({skipped} skipped)")
+    except Exception as e:
+        # Don't fail the scrape if embedding backfill fails
+        print(f"[Embeddings] Auto-backfill failed (non-fatal): {e}")
 
 
 async def run_scheduled_scrape():

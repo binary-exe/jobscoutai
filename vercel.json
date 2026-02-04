@@ -1,3 +1,9 @@
 {
-  "framework": "nextjs"
+  "framework": "nextjs",
+  "build": {
+    "env": {
+      "NEXT_PUBLIC_SITE_URL": "https://jobscoutai.vercel.app",
+      "NEXT_PUBLIC_API_URL": "https://jobscout-api.fly.dev/api/v1"
+    }
+  }
 }

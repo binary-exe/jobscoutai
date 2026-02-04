@@ -43,6 +43,13 @@ class RunTriggerResponse(BaseModel):
     run_id: Optional[int] = None
 
 
+class EmbeddingsBackfillResponse(BaseModel):
+    status: str
+    updated: int = 0
+    skipped: int = 0
+    message: Optional[str] = None
+
+
 # ==================== Auth ====================
 
 def verify_admin_token(
@@ -103,6 +110,81 @@ async def trigger_run(
             status="error",
             message=str(e),
         )
+
+
+@router.post("/embeddings/backfill", response_model=EmbeddingsBackfillResponse)
+async def backfill_embeddings(
+    limit: int = 200,
+    _: bool = Depends(verify_admin_token),
+    settings: Settings = Depends(get_settings),
+):
+    """
+    Backfill missing job embeddings for personalized ranking.
+
+    Requires:
+    - JOBSCOUT_EMBEDDINGS_ENABLED=true
+    - pgvector migration applied (jobs.embedding, jobs.job_embedding_hash)
+    """
+    if settings.use_sqlite:
+        return EmbeddingsBackfillResponse(status="error", message="Embeddings backfill not supported on SQLite")
+
+    if not settings.embeddings_enabled:
+        return EmbeddingsBackfillResponse(status="error", message="Embeddings are disabled (JOBSCOUT_EMBEDDINGS_ENABLED=false)")
+
+    from backend.app.services import embeddings
+
+    updated = 0
+    skipped = 0
+
+    async with db.connection() as conn:
+        try:
+            rows = await conn.fetch(
+                """
+                SELECT job_id, title, company, location_raw, remote_type, tags, description_text,
+                       embedding, job_embedding_hash
+                FROM jobs
+                WHERE embedding IS NULL
+                   OR job_embedding_hash IS NULL
+                ORDER BY first_seen_at DESC
+                LIMIT $1
+                """,
+                limit,
+            )
+        except Exception as e:
+            # Likely pgvector columns not present
+            return EmbeddingsBackfillResponse(status="error", message=f"Embedding columns missing or pgvector not enabled: {e}")
+
+        for row in rows:
+            job = dict(row)
+            text = embeddings.build_job_embedding_text(job)
+            h = embeddings.hash_text_for_embedding(text)
+
+            # Skip if already embedded with same hash
+            if job.get("job_embedding_hash") == h and job.get("embedding") is not None:
+                skipped += 1
+                continue
+
+            result = await embeddings.embed_text(text)
+            if not result.ok or not result.embedding:
+                skipped += 1
+                continue
+
+            try:
+                await conn.execute(
+                    """
+                    UPDATE jobs
+                    SET embedding = $2::vector, job_embedding_hash = $3
+                    WHERE job_id = $1
+                    """,
+                    job["job_id"],
+                    embeddings.to_pgvector_literal(result.embedding),
+                    h,
+                )
+                updated += 1
+            except Exception:
+                skipped += 1
+
+    return EmbeddingsBackfillResponse(status="ok", updated=updated, skipped=skipped)
 
 
 # ==================== SQLite Implementation ====================

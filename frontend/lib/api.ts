@@ -10,6 +10,7 @@ export interface Job {
   company: string;
   location_raw: string;
   country?: string;
+  country_iso?: string;
   city?: string;
   remote_type: 'remote' | 'hybrid' | 'onsite' | 'unknown';
   employment_types: string[];
@@ -24,6 +25,7 @@ export interface Job {
   tags: string[];
   source: string;
   posted_at?: string;
+  expires_at?: string;
   first_seen_at: string;
   last_seen_at: string;
   ai_score?: number;
@@ -84,7 +86,7 @@ export interface SearchParams {
   source?: string;
   posted_since?: number;
   min_score?: number;
-  sort?: 'ai_score' | 'posted_at' | 'first_seen_at';
+  sort?: 'ai_score' | 'posted_at' | 'first_seen_at' | 'personalized';
   page?: number;
   page_size?: number;
 }

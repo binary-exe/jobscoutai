@@ -114,6 +114,14 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);
 ```
 
+### 1.2b (Recommended) Enable personalization with pgvector
+If you want **personalized job ranking** and **semantic matching**, run this SQL next:
+
+```sql
+-- Copy/paste from:
+-- backend/app/storage/pgvector_migration_personalization.sql
+```
+
 ### 1.3 Get Connection String
 1. Go to **Settings > Database**
 2. **Important**: Use the **Session pooler** connection string (not Direct connection)

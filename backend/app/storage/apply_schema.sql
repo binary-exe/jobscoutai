@@ -17,6 +17,34 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_subscription_id ON users(subscription_id);
 
+-- User profiles (1:1 with users)
+CREATE TABLE IF NOT EXISTS user_profiles (
+    user_id UUID PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
+
+    headline TEXT,
+    location TEXT,
+    desired_roles TEXT[] DEFAULT '{}',
+    work_authorization TEXT,
+    remote_preferences TEXT,
+    salary_expectations JSONB,
+
+    skills TEXT[] DEFAULT '{}',
+    education JSONB,
+    certifications TEXT[] DEFAULT '{}',
+    projects JSONB,
+    interests TEXT[] DEFAULT '{}',
+    links JSONB,
+
+    primary_resume_id UUID REFERENCES resume_versions(resume_id) ON DELETE SET NULL,
+
+    profile_hash TEXT,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_at ON user_profiles(updated_at DESC);
+CREATE INDEX IF NOT EXISTS idx_user_profiles_primary_resume_id ON user_profiles(primary_resume_id);
+
 -- Resume versions
 CREATE TABLE IF NOT EXISTS resume_versions (
     resume_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -55,6 +83,7 @@ CREATE TABLE IF NOT EXISTS job_targets (
     keywords TEXT[],
     must_haves TEXT[],
     role_rubric TEXT, -- LLM-generated rubric
+    html TEXT, -- Stored HTML for trust report regeneration (may be truncated in storage layer)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
@@ -69,18 +98,23 @@ CREATE TABLE IF NOT EXISTS trust_reports (
     job_target_id UUID NOT NULL REFERENCES job_targets(job_target_id) ON DELETE CASCADE,
     scam_risk TEXT NOT NULL CHECK (scam_risk IN ('low', 'medium', 'high')),
     scam_reasons TEXT[], -- Array of reasons
+    scam_score INTEGER, -- 0-100
     ghost_likelihood TEXT NOT NULL CHECK (ghost_likelihood IN ('low', 'medium', 'high')),
     ghost_reasons TEXT[],
+    ghost_score INTEGER, -- 0-100
     staleness_score INTEGER, -- 0-100
     staleness_reasons TEXT[],
     domain TEXT,
     extracted_emails TEXT[],
     extracted_phones TEXT[],
     apply_link_status TEXT, -- valid, broken, missing
+    domain_consistency_reasons TEXT[], -- Reasons for domain mismatches
+    trust_score INTEGER, -- Overall trust score 0-100 (higher = more trustworthy)
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
 CREATE INDEX IF NOT EXISTS idx_trust_reports_job_target_id ON trust_reports(job_target_id);
+CREATE INDEX IF NOT EXISTS idx_trust_reports_trust_score ON trust_reports(trust_score DESC);
 
 -- Apply packs (generated tailored content)
 CREATE TABLE IF NOT EXISTS apply_packs (
@@ -123,6 +157,20 @@ CREATE INDEX IF NOT EXISTS idx_applications_user_id ON applications(user_id);
 CREATE INDEX IF NOT EXISTS idx_applications_status ON applications(status);
 CREATE INDEX IF NOT EXISTS idx_applications_applied_at ON applications(applied_at DESC);
 CREATE INDEX IF NOT EXISTS idx_applications_reminder_at ON applications(reminder_at) WHERE reminder_at IS NOT NULL;
+
+-- Application feedback (structured rejection/outcome data)
+CREATE TABLE IF NOT EXISTS application_feedback (
+    feedback_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    application_id UUID NOT NULL REFERENCES applications(application_id) ON DELETE CASCADE,
+    feedback_type TEXT NOT NULL CHECK (feedback_type IN ('rejection', 'shortlisted', 'offer', 'no_response', 'withdrawn')),
+    raw_text TEXT, -- Original feedback text (email, notification, etc.)
+    parsed_json JSONB, -- Structured data: decision, reason_categories, signals
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_application_feedback_application_id ON application_feedback(application_id);
+CREATE INDEX IF NOT EXISTS idx_application_feedback_type ON application_feedback(feedback_type);
+CREATE INDEX IF NOT EXISTS idx_application_feedback_created_at ON application_feedback(created_at DESC);
 
 -- Usage ledger (for quota tracking)
 CREATE TABLE IF NOT EXISTS usage_ledger (

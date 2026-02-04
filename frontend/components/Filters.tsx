@@ -27,6 +27,7 @@ const TIME_OPTIONS = [
 ];
 
 const SORT_OPTIONS = [
+  { value: 'personalized', label: 'Personalized' },
   { value: 'ai_score', label: 'Best match' },
   { value: 'posted_at', label: 'Most recent' },
   { value: 'first_seen_at', label: 'Newest' },

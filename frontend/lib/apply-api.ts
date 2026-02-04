@@ -1,32 +1,41 @@
 /**
  * API client for Apply Workspace endpoints.
+ * 
+ * All Apply Workspace endpoints require authentication (Supabase JWT).
+ * There is no anonymous access - users must be logged in.
  */
+
+import { supabase } from '@/lib/supabase';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
-// Get or create user ID (stored in localStorage for anonymous users)
-function getUserId(): string {
-  if (typeof window === 'undefined') return '';
-  
-  let userId = localStorage.getItem('jobscout_user_id');
-  if (!userId) {
-    userId = crypto.randomUUID();
-    localStorage.setItem('jobscout_user_id', userId);
-  }
-  return userId;
+/**
+ * Get the current auth token. Returns null if not authenticated.
+ */
+async function getAuthToken(): Promise<string | null> {
+  const { data } = await supabase.auth.getSession();
+  return data.session?.access_token || null;
 }
 
+/**
+ * Make an authenticated API request.
+ * Throws an error if not authenticated or if the request fails.
+ */
 async function apiRequest<T>(
   endpoint: string,
   options: RequestInit = {}
 ): Promise<T> {
-  const userId = getUserId();
+  const token = await getAuthToken();
+  
+  if (!token) {
+    throw new Error('Authentication required. Please log in to use Apply Workspace.');
+  }
   
   const response = await fetch(`${API_URL}${endpoint}`, {
     ...options,
     headers: {
       'Content-Type': 'application/json',
-      'X-User-ID': userId,
+      Authorization: `Bearer ${token}`,
       ...options.headers,
     },
   });
@@ -57,14 +66,19 @@ export interface ParsedJob {
 }
 
 export async function uploadResume(file: File): Promise<{ resume_text: string; filename: string; size: number }> {
-  const userId = getUserId();
+  const token = await getAuthToken();
+  
+  if (!token) {
+    throw new Error('Authentication required. Please log in to upload a resume.');
+  }
+  
   const formData = new FormData();
   formData.append('file', file);
   
   const response = await fetch(`${API_URL}/apply/resume/upload`, {
     method: 'POST',
     headers: {
-      'X-User-ID': userId,
+      Authorization: `Bearer ${token}`,
     },
     body: formData,
   });
@@ -152,10 +166,20 @@ export interface TrustReport {
   staleness_reasons?: string[];
   scam_score?: number;
   ghost_score?: number;
+  apply_link_status?: string;
+  domain_consistency_reasons?: string[];
+  trust_score?: number;
 }
 
-export async function generateTrustReport(jobTargetId: string): Promise<TrustReport> {
-  return apiRequest<TrustReport>(`/apply/job/${jobTargetId}/trust`, {
+export async function generateTrustReport(
+  jobTargetId: string,
+  opts: { force?: boolean; refresh_apply_link?: boolean } = {}
+): Promise<TrustReport> {
+  const qs = new URLSearchParams();
+  if (opts.force) qs.set('force', 'true');
+  if (opts.refresh_apply_link) qs.set('refresh_apply_link', 'true');
+  const suffix = qs.toString() ? `?${qs.toString()}` : '';
+  return apiRequest<TrustReport>(`/apply/job/${jobTargetId}/trust${suffix}`, {
     method: 'POST',
   });
 }
@@ -204,6 +228,7 @@ export async function getHistory(): Promise<{ packs: ApplyPackHistory[]; total: 
 
 export interface Quota {
   plan: 'free' | 'paid';
+  subscription_status?: string;
   apply_packs: {
     allowed: boolean;
     remaining?: number;
@@ -215,6 +240,12 @@ export interface Quota {
     remaining?: number;
     limit?: number;
   };
+  tracking: {
+    allowed: boolean;
+    remaining?: number;
+    limit?: number;
+    used?: number;
+  };
 }
 
 export async function getQuota(): Promise<Quota> {
@@ -222,10 +253,15 @@ export async function getQuota(): Promise<Quota> {
 }
 
 export async function exportApplyPackDocx(applyPackId: string, format: 'resume' | 'cover' | 'combined' = 'combined'): Promise<Blob> {
-  const userId = getUserId();
+  const token = await getAuthToken();
+  
+  if (!token) {
+    throw new Error('Authentication required. Please log in to export documents.');
+  }
+  
   const response = await fetch(`${API_URL}/apply/pack/${applyPackId}/export?format=${format}`, {
     headers: {
-      'X-User-ID': userId,
+      Authorization: `Bearer ${token}`,
     },
   });
 
@@ -244,6 +280,9 @@ export interface Application {
   company?: string;
   job_url?: string;
   applied_at?: string;
+  interview_at?: string;
+  offer_at?: string;
+  rejected_at?: string;
   notes?: string;
   reminder_at?: string;
 }
@@ -280,4 +319,42 @@ export async function updateApplication(
     method: 'PUT',
     body: JSON.stringify(updates),
   });
+}
+
+export interface ApplicationFeedback {
+  feedback_id: string;
+  feedback_type: 'rejection' | 'shortlisted' | 'offer' | 'no_response' | 'withdrawn';
+  raw_text?: string;
+  parsed_json?: {
+    decision?: string;
+    reason_categories?: string[];
+    signals?: string[];
+  };
+  created_at?: string;
+}
+
+export async function createApplicationFeedback(
+  applicationId: string,
+  feedback: {
+    feedback_type: string;
+    raw_text?: string;
+    parsed_json?: Record<string, unknown>;
+  }
+): Promise<ApplicationFeedback> {
+  return apiRequest<ApplicationFeedback>(`/apply/application/${applicationId}/feedback`, {
+    method: 'POST',
+    body: JSON.stringify(feedback),
+  });
+}
+
+export async function getApplicationFeedback(applicationId: string): Promise<{ feedback: ApplicationFeedback[] }> {
+  return apiRequest<{ feedback: ApplicationFeedback[] }>(`/apply/application/${applicationId}/feedback`);
+}
+
+/**
+ * Check if user is authenticated. Useful for auth guards.
+ */
+export async function isAuthenticated(): Promise<boolean> {
+  const token = await getAuthToken();
+  return !!token;
 }
