@@ -78,6 +78,60 @@ GENERIC_DESCRIPTIONS = [
     "competitive salary", "excellent benefits", "dynamic environment",
 ]
 
+# Description-quality heuristics (low-signal / irregular postings)
+_B64ISH_RE = re.compile(r"\b[A-Za-z0-9+/]{20,}={0,2}\b")
+_REQUIREMENT_HINTS_RE = re.compile(
+    r"\b(required|requirements|must have|must-have|you will|responsibilit(?:y|ies)|"
+    r"qualifications|experience (?:with|in)|years of experience|proficient in|"
+    r"familiar with|knowledge of|nice to have|preferred)\b",
+    re.IGNORECASE,
+)
+
+
+def _description_quality_penalty(description_text: Optional[str]) -> Dict[str, Any]:
+    """
+    Estimate how low-signal / irregular a job description is.
+
+    Returns:
+        {"penalty": int (0-40), "reasons": List[str]}
+    """
+    text = (description_text or "").strip()
+    if not text:
+        return {"penalty": 25, "reasons": ["Missing job description text"]}
+
+    reasons: List[str] = []
+    penalty = 0
+
+    # 1) Obfuscated / encoded tokens
+    if _B64ISH_RE.search(text):
+        penalty += 18
+        reasons.append("Contains long encoded/obfuscated tokens (low-signal description)")
+
+    # 2) Noise ratio (lots of symbols, few letters) => hard to assess authenticity
+    cleaned = re.sub(r"\s+", " ", text)
+    total = max(1, len(cleaned))
+    letters = sum(1 for c in cleaned if c.isalpha())
+    if (letters / total) < 0.55:
+        penalty += 10
+        reasons.append("Description is unusually noisy/irregular (few letters vs symbols)")
+
+    # 3) Lack of concrete requirements/responsibilities
+    hint_matches = len(_REQUIREMENT_HINTS_RE.findall(text))
+    if hint_matches == 0:
+        penalty += 15
+        reasons.append("Lacks clear responsibilities/requirements (hard to validate)")
+    elif hint_matches <= 2:
+        penalty += 7
+        reasons.append("Very few concrete responsibilities/requirements")
+
+    # 4) Human-verification / “mention the word” patterns (often legitimate, but low-signal)
+    if re.search(r"\b(mention the word|tag\s+[A-Za-z0-9]{6,}|verify you(?:'| a)?re human)\b", text, re.IGNORECASE):
+        penalty += 8
+        reasons.append("Contains human-verification token text (often low-signal / board artifact)")
+
+    penalty = min(40, penalty)
+    return {"penalty": penalty, "reasons": reasons[:3]}
+
 # Apply-link enrichment controls (cheap; no paid APIs)
 def _int_env(name: str, default: int) -> int:
     try:
@@ -342,7 +396,13 @@ def analyze_ghost_likelihood(
         has_specifics = bool(re.search(r'(required|must have|experience with|proficient in)', text, re.IGNORECASE))
         if not has_specifics:
             reasons.append("Lacks specific job requirements")
-            score += 5
+            score += 12
+
+    # Penalize low-signal / irregular descriptions (users should not over-trust these)
+    quality = _description_quality_penalty(description_text)
+    if quality["penalty"] > 0:
+        score += int(quality["penalty"])
+        reasons.extend([r for r in quality["reasons"] if r not in reasons][:2])
     
     # Check posting date (very old postings might be ghost jobs)
     if posted_at:

@@ -276,7 +276,7 @@ export async function getHistory(): Promise<{ packs: ApplyPackHistory[]; total: 
 }
 
 export interface Quota {
-  plan: 'free' | 'paid';
+  plan: string;
   subscription_status?: string;
   apply_packs: {
     allowed: boolean;
@@ -295,6 +295,9 @@ export interface Quota {
     limit?: number;
     used?: number;
   };
+  premium_ai_enabled?: boolean;
+  premium_ai_configured?: boolean;
+  apply_pack_review_enabled?: boolean;
 }
 
 export async function getQuota(): Promise<Quota> {

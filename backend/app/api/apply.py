@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Optional
 from uuid import UUID
 import json
+import re
 
 from fastapi import APIRouter, HTTPException, Depends, Header, Response, UploadFile, File, Form, Query
 from fastapi.responses import StreamingResponse
@@ -94,6 +95,48 @@ def _clamp_int(x: float | int, lo: int = 0, hi: int = 100) -> int:
         return lo
 
 
+_B64ISH_RE = re.compile(r"\b[A-Za-z0-9+/]{20,}={0,2}\b")
+_REQ_HINTS_RE = re.compile(
+    r"\b(required|requirements|must have|must-have|responsibilit(?:y|ies)|"
+    r"qualifications|experience (?:with|in)|years of experience|proficient in|"
+    r"familiar with|knowledge of|nice to have|preferred)\b",
+    re.IGNORECASE,
+)
+
+
+def _estimate_description_quality(description_text: Optional[str]) -> int:
+    """
+    Returns a 0..100 "badness" score: higher means the description is low-signal/irregular.
+
+    This is used to lower confidence (we may have text, but it might not be *useful* text).
+    """
+    text = (description_text or "").strip()
+    if not text:
+        return 100
+
+    bad = 0
+
+    if _B64ISH_RE.search(text):
+        bad += 35
+
+    cleaned = re.sub(r"\s+", " ", text)
+    total = max(1, len(cleaned))
+    letters = sum(1 for c in cleaned if c.isalpha())
+    if (letters / total) < 0.55:
+        bad += 20
+
+    hints = len(_REQ_HINTS_RE.findall(text))
+    if hints == 0:
+        bad += 25
+    elif hints <= 2:
+        bad += 10
+
+    if re.search(r"\b(mention the word|tag\s+[A-Za-z0-9]{6,}|verify you(?:'| a)?re human)\b", text, re.IGNORECASE):
+        bad += 15
+
+    return _clamp_int(bad, 0, 100)
+
+
 def _build_confidence(report: dict, *, ctx: dict) -> dict:
     """
     Confidence reflects signal coverage (what we were actually able to check),
@@ -107,6 +150,7 @@ def _build_confidence(report: dict, *, ctx: dict) -> dict:
     has_expires_at = bool(ctx.get("has_expires_at"))
     has_apply_url = bool(ctx.get("has_apply_url"))
     has_company_website = bool(ctx.get("has_company_website"))
+    desc_quality_badness = _clamp_int(ctx.get("description_quality") or 0)
 
     apply_link_status = (report.get("apply_link_status") or "").lower()
 
@@ -134,6 +178,21 @@ def _build_confidence(report: dict, *, ctx: dict) -> dict:
         link = 55 if (has_apply_url or has_job_url) else 30
     else:
         link = 45 if (has_apply_url or has_job_url) else 30
+
+    # If the description is present but low-signal/irregular, reduce confidence:
+    # we "have text", but it may not be trustworthy/useful for analysis.
+    if desc_quality_badness >= 80:
+        scam -= 30
+        ghost -= 30
+        staleness -= 25
+    elif desc_quality_badness >= 60:
+        scam -= 20
+        ghost -= 20
+        staleness -= 15
+    elif desc_quality_badness >= 40:
+        scam -= 10
+        ghost -= 10
+        staleness -= 8
 
     # Weighted overall aligned to trust-score weights
     overall = (
@@ -830,7 +889,8 @@ async def generate_trust_report(
         # Check cache (unless forced)
         existing = await apply_storage.get_trust_report(conn, job_target_id)
         if existing and not force:
-            # For cached reports, include cheap link warnings (no network)
+            # For cached reports, recompute using current logic while reusing cached apply-link checks.
+            # This prevents stale/over-trusting scores after logic upgrades.
             extracted_json = job_target.get("extracted_json")
             if isinstance(extracted_json, str):
                 try:
@@ -847,28 +907,46 @@ async def generate_trust_report(
                 or job_target.get("apply_url")
                 or job_target.get("job_url")
             )
-            link_warnings = _link_warnings_from_url(apply_url)
+
+            posted_at = job_target.get("posted_at") if job_target.get("posted_at") else None
+            expires_at = job_target.get("expires_at") if job_target.get("expires_at") else None
+            stored_html = job_target.get("html")
+            company_website = extracted_json.get("company_website")
+            source = extracted_json.get("source")  # e.g., "jobscout", "remoteok"
+
+            report_data = await trust_analyzer.generate_trust_report(
+                job_target_id=str(job_target_id),
+                job_url=job_target.get("job_url"),
+                description_text=job_target.get("description_text"),
+                posted_at=posted_at,
+                expires_at=expires_at,
+                html=stored_html,
+                apply_url=apply_url,
+                company_website=company_website,
+                source=source,
+                cached_trust_report=dict(existing),
+            )
 
             community = await apply_storage.get_trust_report_feedback_summary(conn, job_target_id)
             penalty, community_reasons = _community_penalty(community)
-            trust_score = existing.get("trust_score")
+            trust_score = report_data.get("trust_score")
             trust_score_after_community = max(0, int(trust_score) - penalty) if trust_score is not None else None
             payload = {
                 "trust_report_id": str(existing["trust_report_id"]),
-                "scam_risk": existing["scam_risk"],
-                "scam_reasons": existing.get("scam_reasons", []) or [],
-                "ghost_likelihood": existing["ghost_likelihood"],
-                "ghost_reasons": existing.get("ghost_reasons", []) or [],
-                "staleness_score": existing.get("staleness_score"),
-                "staleness_reasons": existing.get("staleness_reasons"),
-                "scam_score": existing.get("scam_score"),
-                "ghost_score": existing.get("ghost_score"),
-                "apply_link_status": existing.get("apply_link_status"),
-                "apply_link_final_url": None,
-                "apply_link_redirects": None,
-                "apply_link_cached": True,
-                "apply_link_warnings": link_warnings,
-                "domain_consistency_reasons": existing.get("domain_consistency_reasons"),
+                "scam_risk": report_data["scam_risk"],
+                "scam_reasons": report_data.get("scam_reasons", []) or [],
+                "ghost_likelihood": report_data["ghost_likelihood"],
+                "ghost_reasons": report_data.get("ghost_reasons", []) or [],
+                "staleness_score": report_data.get("staleness_score"),
+                "staleness_reasons": report_data.get("staleness_reasons"),
+                "scam_score": report_data.get("scam_score"),
+                "ghost_score": report_data.get("ghost_score"),
+                "apply_link_status": report_data.get("apply_link_status"),
+                "apply_link_final_url": report_data.get("apply_link_final_url"),
+                "apply_link_redirects": report_data.get("apply_link_redirects"),
+                "apply_link_cached": report_data.get("apply_link_cached", True),
+                "apply_link_warnings": report_data.get("apply_link_warnings") or _link_warnings_from_url(apply_url),
+                "domain_consistency_reasons": report_data.get("domain_consistency_reasons"),
                 "trust_score_raw": int(trust_score) if trust_score is not None else None,
                 "trust_score_after_community": trust_score_after_community,
                 "trust_score": trust_score_after_community,
@@ -876,12 +954,13 @@ async def generate_trust_report(
             ctx = {
                 "has_description": bool(job_target.get("description_text")),
                 "description_len": len((job_target.get("description_text") or "").strip()),
+                "description_quality": _estimate_description_quality(job_target.get("description_text")),
                 "has_html": bool(job_target.get("html")),
                 "has_job_url": bool(job_target.get("job_url")),
                 "has_posted_at": bool(job_target.get("posted_at")),
                 "has_expires_at": bool(job_target.get("expires_at")),
                 "has_apply_url": bool(apply_url),
-                "has_company_website": bool(extracted_json.get("company_website")),
+                "has_company_website": bool(company_website),
             }
             confidence = _build_confidence(payload, ctx=ctx)
             payload["trust_score"] = _confidence_adjust_trust_score(
@@ -988,6 +1067,7 @@ async def generate_trust_report(
         ctx = {
             "has_description": bool(job_target.get("description_text")),
             "description_len": len((job_target.get("description_text") or "").strip()),
+            "description_quality": _estimate_description_quality(job_target.get("description_text")),
             "has_html": bool(job_target.get("html")),
             "has_job_url": bool(job_target.get("job_url")),
             "has_posted_at": bool(job_target.get("posted_at")),
@@ -1740,6 +1820,7 @@ async def get_quota(
     user_id: UUID = Depends(require_auth_user),
 ):
     """Get user's current quota status including apply packs, exports, and tracking."""
+    settings = get_settings()
     async with db.connection() as conn:
         user = await apply_storage.get_user(conn, user_id)
         if not user:
@@ -1755,6 +1836,10 @@ async def get_quota(
             "apply_packs": apply_pack_quota,
             "docx_export": docx_quota,
             "tracking": tracking_quota,
+            # Server capability flags for frontend gating (avoid noisy 404s when disabled)
+            "premium_ai_enabled": bool(getattr(settings, "premium_ai_enabled", False)),
+            "premium_ai_configured": bool(settings.openai_api_key),
+            "apply_pack_review_enabled": bool(getattr(settings, "apply_pack_review_enabled", False)),
         }
 
 

@@ -6,7 +6,7 @@ import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { FileText, Link as LinkIcon, Sparkles, CheckCircle2, AlertTriangle, Clock, Loader2, Edit2, Save, Shield, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
-import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, submitTrustFeedback, uploadResume, importJobFromJobScout, createApplication, getHistory, getJobTarget, generateInterviewCoach, generatePremiumTemplate, type ParsedJob, type ApplyPack, type TrustReport, type InterviewCoachResult, type PremiumTemplateResult } from '@/lib/apply-api';
+import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, submitTrustFeedback, uploadResume, importJobFromJobScout, createApplication, getHistory, getJobTarget, generateInterviewCoach, generatePremiumTemplate, getQuota, type Quota, type ParsedJob, type ApplyPack, type TrustReport, type InterviewCoachResult, type PremiumTemplateResult } from '@/lib/apply-api';
 import type { JobDetail } from '@/lib/api';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getProfile, getResume } from '@/lib/profile-api';
@@ -50,6 +50,8 @@ export default function ApplyWorkspacePage() {
   const [templateType, setTemplateType] = useState<'cover_letter' | 'follow_up_email'>('cover_letter');
   const [templateTone, setTemplateTone] = useState<'professional' | 'technical' | 'enthusiastic'>('professional');
   const [isGeneratingTemplate, setIsGeneratingTemplate] = useState(false);
+  const [quota, setQuota] = useState<Quota | null>(null);
+  const [quotaLoaded, setQuotaLoaded] = useState(false);
 
   // Auth check - redirect to login if not authenticated
   useEffect(() => {
@@ -84,6 +86,25 @@ export default function ApplyWorkspacePage() {
       cancelled = true;
     };
   }, [router, searchParams]);
+
+  // Load quota/capability flags once authenticated (prevents noisy 404s for disabled Premium AI endpoints)
+  useEffect(() => {
+    let cancelled = false;
+    if (!authChecked || !isAuthenticated) return;
+    (async () => {
+      try {
+        const q = await getQuota();
+        if (!cancelled) setQuota(q);
+      } catch {
+        // best-effort; don't block UI
+      } finally {
+        if (!cancelled) setQuotaLoaded(true);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [authChecked, isAuthenticated]);
 
   // If logged in, auto-load primary resume from Profile once
   useEffect(() => {
@@ -401,6 +422,25 @@ export default function ApplyWorkspacePage() {
 
   const handleGenerateInterviewCoach = async () => {
     if (!resumeText.trim() || !parsedJob) return;
+    let q = quota;
+    if (!quotaLoaded) {
+      try {
+        q = await getQuota();
+        setQuota(q);
+      } catch {
+        // ignore; fallback to attempting request
+      } finally {
+        setQuotaLoaded(true);
+      }
+    }
+    if (q && q.premium_ai_enabled === false) {
+      setError('Interview Coach is not enabled on this server.');
+      return;
+    }
+    if (q && q.premium_ai_configured === false) {
+      setError('AI is not configured. Contact support.');
+      return;
+    }
     setIsGeneratingInterviewCoach(true);
     setInterviewCoachResult(null);
     setError(null);
@@ -428,6 +468,25 @@ export default function ApplyWorkspacePage() {
 
   const handleGenerateTemplate = async () => {
     if (!resumeText.trim() || !parsedJob) return;
+    let q = quota;
+    if (!quotaLoaded) {
+      try {
+        q = await getQuota();
+        setQuota(q);
+      } catch {
+        // ignore; fallback to attempting request
+      } finally {
+        setQuotaLoaded(true);
+      }
+    }
+    if (q && q.premium_ai_enabled === false) {
+      setError('Premium AI templates are not enabled on this server.');
+      return;
+    }
+    if (q && q.premium_ai_configured === false) {
+      setError('AI is not configured. Contact support.');
+      return;
+    }
     setIsGeneratingTemplate(true);
     setTemplateResult(null);
     setError(null);
@@ -1347,10 +1406,16 @@ export default function ApplyWorkspacePage() {
                     <button
                       type="button"
                       onClick={handleGenerateInterviewCoach}
-                      disabled={isGeneratingInterviewCoach}
+                      disabled={isGeneratingInterviewCoach || !quotaLoaded || quota?.premium_ai_enabled === false}
                       className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                     >
-                      {isGeneratingInterviewCoach ? 'Generating…' : 'Generate interview prep'}
+                      {!quotaLoaded
+                        ? 'Checking availability…'
+                        : quota?.premium_ai_enabled === false
+                          ? 'Not enabled on this server'
+                          : isGeneratingInterviewCoach
+                            ? 'Generating…'
+                            : 'Generate interview prep'}
                     </button>
                   ) : (
                     <div className="space-y-4">
@@ -1433,10 +1498,16 @@ export default function ApplyWorkspacePage() {
                       <button
                         type="button"
                         onClick={handleGenerateTemplate}
-                        disabled={isGeneratingTemplate}
+                        disabled={isGeneratingTemplate || !quotaLoaded || quota?.premium_ai_enabled === false}
                         className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                       >
-                        {isGeneratingTemplate ? 'Generating…' : 'Generate'}
+                        {!quotaLoaded
+                          ? 'Checking availability…'
+                          : quota?.premium_ai_enabled === false
+                            ? 'Not enabled on this server'
+                            : isGeneratingTemplate
+                              ? 'Generating…'
+                              : 'Generate'}
                       </button>
                     </div>
                   ) : (
