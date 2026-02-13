@@ -9,6 +9,7 @@ from typing import Dict, Optional, Any, List, Tuple
 from io import BytesIO
 import re
 import zipfile
+from urllib.parse import urlparse
 
 try:
     from docx import Document
@@ -38,6 +39,11 @@ _DATE_RANGE_ONLY_RE = re.compile(
 def _strip_bullet_prefix(s: str) -> str:
     t = (s or "").strip()
     return _BULLET_PREFIX_RE.sub("", t).strip()
+
+
+def _strip_leading_markers(s: str) -> str:
+    # Resume text often contains decorative glyphs; strip them for ATS/consistency.
+    return (s or "").lstrip("◆■●►⚫★▶━═—⧉•*- ").strip()
 
 
 def _is_probable_name_line(line: str) -> bool:
@@ -219,18 +225,43 @@ def _extract_contact_items(line: str) -> List[Dict[str, str]]:
             url = "https://" + url.lstrip("/")
         items.append({"type": "github", "value": "GitHub", "url": url})
 
+    def _is_valid_http_url(u: str) -> bool:
+        try:
+            p = urlparse(u)
+            if p.scheme not in ("http", "https"):
+                return False
+            host = (p.netloc or "").lower()
+            if not host or "." not in host:
+                return False
+            # Reject "www.something" without a real TLD (common extraction artifact)
+            if host.startswith("www.") and host.count(".") == 1:
+                return False
+            # Require a plausible TLD
+            if not re.search(r"\.[a-z]{2,}$", host):
+                return False
+            return True
+        except Exception:
+            return False
+
     # Other URLs
     for url in re.findall(r"https?://[^\s|]+", line, flags=re.I):
         if "linkedin.com" in url.lower() or "github.com" in url.lower():
             continue
-        items.append({"type": "website", "value": url, "url": url})
+        if _is_valid_http_url(url):
+            items.append({"type": "website", "value": url, "url": url})
 
     # Bare domains (portfolio) e.g. abdullahjavaid.me
-    for domain in re.findall(r"\b([A-Za-z0-9-]+\.[A-Za-z]{2,})(?:/[^\s|]*)?\b", line):
-        d = domain.lower()
-        if any(x in d for x in ("linkedin.com", "github.com")):
+    # Keep strict to avoid broken matches like "https://www.upwork"
+    for domain in re.findall(r"\b([A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+)\b", line):
+        d = domain.lower().strip(".")
+        if any(x in d for x in ("linkedin.com", "github.com", "upwork.com")):
+            continue
+        if d.startswith("www.") and d.count(".") == 1:
             continue
         if d in ("gmail.com", "outlook.com", "hotmail.com"):
+            continue
+        # Only accept plausible domains with a TLD of 2+ chars
+        if not re.search(r"\.[a-z]{2,}$", d):
             continue
         items.append({"type": "website", "value": domain, "url": "https://" + domain})
     
@@ -323,6 +354,8 @@ def _parse_skills(lines: List[str]) -> List[Dict[str, Any]]:
     for line in lines:
         line = line.strip()
         if not line or line.startswith('—') or line.startswith('━'):
+            continue
+        if line.lower().startswith("relevant keywords:"):
             continue
         # Check if it's a categorized skill line (Category: skill1, skill2)
         if ':' in line:
@@ -489,7 +522,7 @@ def _parse_projects(lines: List[str]) -> List[Dict[str, Any]]:
         if line.startswith('⧉') or line.startswith('►') or (line.startswith('•') and not line_no_bullet.lower().startswith("url:")):
             if current_project:
                 projects.append(current_project)
-            project_name = line_no_bullet
+            project_name = _strip_leading_markers(line_no_bullet)
             # Check for URL
             url_match = re.search(r'https?://[^\s]+', project_name)
             url = url_match.group() if url_match else None
@@ -618,6 +651,8 @@ def _clean_docx_text(s: str) -> str:
         .replace("\u201D", '"')
         .replace("\u00A0", " ")  # NBSP
     )
+    # Replace decorative bullets with a safe separator
+    t = t.replace("•", " | ")
     # Remove common markdown / prefix noise from LLM outputs
     t = re.sub(r"^\s*(#+\s*)", "", t)
     t = t.replace("**", "").replace("__", "")
@@ -652,20 +687,59 @@ def _setup_resume_styles(doc: "Document") -> None:
     font.size = Pt(10.5)
     font.color.rgb = RGBColor(0x33, 0x33, 0x33)
 
-    # Bullet list style: avoid mixing built-in list formatting with per-paragraph indents.
-    try:
-        bullet = doc.styles["List Bullet"]
-        bullet_font = bullet.font
-        bullet_font.name = "Calibri"
-        bullet_font.size = Pt(10.5)
-        bullet_font.color.rgb = RGBColor(0x33, 0x33, 0x33)
-        pf = bullet.paragraph_format
-        pf.space_before = Pt(0)
-        pf.space_after = Pt(2)
-        pf.line_spacing_rule = WD_LINE_SPACING.SINGLE
-        # Keep default bullet indentation (varies by Word), but do not override per paragraph.
-    except Exception:
-        pass
+    # We intentionally do NOT rely on Word's built-in list styles for bullets.
+    # Different Word templates render those differently, causing indentation drift.
+
+
+def _add_bullet_paragraph(doc: "Document", text: str) -> None:
+    """
+    Add a bullet with explicit hanging indentation (stable across Word templates).
+    Uses a hyphen bullet for maximum ATS compatibility.
+    """
+    t = _strip_bullet_prefix(_strip_leading_markers(_clean_docx_text(text)))
+    if not t:
+        return
+    para = doc.add_paragraph()
+    pf = para.paragraph_format
+    pf.space_before = Pt(0)
+    pf.space_after = Pt(2)
+    pf.line_spacing_rule = WD_LINE_SPACING.SINGLE
+    pf.left_indent = Inches(0.30)
+    pf.first_line_indent = Inches(-0.15)  # hanging indent for "- "
+    para.add_run(f"- {t}")
+
+
+def _fix_bullet_verb_tense(text: str) -> str:
+    """
+    Tiny polish for common present→past tense mistakes that hurt reviewer impression.
+    Keep conservative; never invent content.
+    """
+    t = _clean_docx_text(text)
+    if t.lower().startswith("lead "):
+        return "Led " + t[5:]
+    return t
+
+
+def _polish_experience_bullet(text: str) -> str:
+    """
+    Best-effort polish for reviewer/ATS readability.
+    Must remain truthful: only reformat/normalize the existing content.
+    """
+    t = _fix_bullet_verb_tense(text)
+    t = _clean_docx_text(t)
+    # Expand common abbreviations (keep conservative)
+    t = re.sub(r"\bhrs\b", "hours", t, flags=re.IGNORECASE)
+    t = re.sub(r"\bhr\b", "hour", t, flags=re.IGNORECASE)
+    # Make common metric phrases read naturally (still the same fact)
+    t = re.sub(r"(?<!\w)\+(\d+%)\s+conversion\b", r"improving conversion by \1", t, flags=re.IGNORECASE)
+    # Remove leading "+" before numeric metrics (e.g. "+34%") while preserving the metric
+    t = re.sub(r"(?<!\w)\+(\d)", r"\1", t)
+    # Normalize spaces around slashes
+    t = re.sub(r"\s*/\s*", "/", t)
+    # Ensure consistent ending punctuation
+    if t and t[-1] not in ".!?":
+        t += "."
+    return t
 
 
 def _add_right_aligned_dates_run(para, dates: str, *, section) -> None:
@@ -729,7 +803,7 @@ def _add_section_header(doc, title: str):
     para.paragraph_format.space_before = Pt(14)
     para.paragraph_format.space_after = Pt(6)
     
-    run = para.add_run(title.upper())
+    run = para.add_run(_clean_docx_text(title).upper())
     run.bold = True
     run.font.size = Pt(11)
     # ATS-minimal mode: no colors/borders/graphics
@@ -771,6 +845,15 @@ def _select_relevant_keywords(
         k = _clean_docx_text(str(kw or ""))
         if not k:
             continue
+        # Normalize common ATS acronyms
+        if k.lower() == "api":
+            k = "API"
+        elif k.lower() == "rest":
+            k = "REST"
+        elif k.lower() == "sql":
+            k = "SQL"
+        elif k.lower() == "ci/cd":
+            k = "CI/CD"
         kl = k.lower()
         if kl in seen:
             continue
@@ -821,7 +904,7 @@ def generate_resume_docx(
     
     # ==================== HEADER ====================
     # Name
-    name = parsed.get('name', 'Your Name')
+    name = _clean_docx_text(parsed.get('name', 'Your Name'))
     name_para = doc.add_paragraph()
     name_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     name_run = name_para.add_run(name.upper())
@@ -831,13 +914,13 @@ def generate_resume_docx(
     name_para.paragraph_format.space_after = Pt(2)
     
     # Title/Headline
-    title = parsed.get('title', '')
+    title = _clean_docx_text(parsed.get('title', ''))
     if title:
         title_para = doc.add_paragraph()
         title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         title_run = title_para.add_run(title)
         title_run.font.size = Pt(11)
-        title_run.font.color.rgb = RGBColor(0x55, 0x55, 0x55)
+        title_run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
         title_para.paragraph_format.space_after = Pt(4)
     
     # Contact info (single line, centered)
@@ -871,7 +954,9 @@ def generate_resume_docx(
     if contact_parts:
         contact_para = doc.add_paragraph()
         contact_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
-        contact_text = " | ".join(contact_parts[:5])  # keep header single-line
+        # Keep only the most important items to avoid wrapping/indent glitches in Word.
+        # Order is already: email, phone, location, links...
+        contact_text = " | ".join(contact_parts[:4])
         contact_run = contact_para.add_run(contact_text)
         contact_run.font.size = Pt(9)
         contact_run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
@@ -897,9 +982,7 @@ def generate_resume_docx(
         for bullet in tailored_bullets:
             bullet_text = bullet.get('text', '') if isinstance(bullet, dict) else str(bullet)
             if bullet_text:
-                para = doc.add_paragraph(style="List Bullet")
-                para.add_run(_strip_bullet_prefix(_clean_docx_text(bullet_text)))
-                para.paragraph_format.space_after = Pt(3)
+                _add_bullet_paragraph(doc, bullet_text)
     
     # ==================== SKILLS ====================
     skills = parsed.get('skills', [])
@@ -914,9 +997,7 @@ def generate_resume_docx(
                 para.paragraph_format.space_after = Pt(2)
             elif isinstance(skill_group, dict) and skill_group.get('items'):
                 for item in skill_group['items']:
-                    para = doc.add_paragraph(style="List Bullet")
-                    para.add_run(_clean_docx_text(str(item)))
-                    para.paragraph_format.space_after = Pt(2)
+                    _add_bullet_paragraph(doc, str(item))
 
         # Optional ATS keyword line (only includes keywords already present in resume/pack text)
         kws = _select_relevant_keywords(
@@ -926,7 +1007,8 @@ def generate_resume_docx(
             tailored_bullets=tailored_bullets or [],
             max_items=12,
         )
-        if kws:
+        already_has_kw_line = "relevant keywords:" in (original_resume_text or "").lower()
+        if kws and not already_has_kw_line:
             kw_para = doc.add_paragraph()
             r1 = kw_para.add_run("Relevant keywords: ")
             r1.bold = True
@@ -952,12 +1034,12 @@ def generate_resume_docx(
             # Company
             company = exp.get('company', '')
             if company:
-                job_para.add_run(f"  —  {_clean_docx_text(company)}")
+                job_para.add_run(f" | {_clean_docx_text(company)}")
             
             # Location
             location = exp.get('location', '')
             if location:
-                job_para.add_run(f"  |  {_clean_docx_text(location)}")
+                job_para.add_run(f" | {_clean_docx_text(location)}")
 
             # Dates (right aligned, same line)
             _add_right_aligned_dates_run(job_para, exp.get("dates", ""), section=doc.sections[0])
@@ -965,9 +1047,7 @@ def generate_resume_docx(
             # Bullets
             for bullet in exp.get('bullets', []):
                 if bullet:
-                    bullet_para = doc.add_paragraph(style="List Bullet")
-                    bullet_para.add_run(_strip_bullet_prefix(_clean_docx_text(str(bullet))))
-                    bullet_para.paragraph_format.space_after = Pt(2)
+                    _add_bullet_paragraph(doc, _polish_experience_bullet(str(bullet)))
     
     # ==================== PROJECTS ====================
     projects = parsed.get('projects', [])
@@ -980,20 +1060,28 @@ def generate_resume_docx(
             proj_para.paragraph_format.space_after = Pt(2)
             
             # Project name (bold)
-            name_run = proj_para.add_run(_clean_docx_text(proj.get('name', 'Project')))
+            name_run = proj_para.add_run(_clean_docx_text(_strip_leading_markers(proj.get('name', 'Project'))))
             name_run.bold = True
             
             # URL
             url = proj.get('url', '')
             if url:
-                proj_para.add_run(f"  —  {_clean_docx_text(url)}")
+                proj_para.add_run(f" | {_clean_docx_text(url)}")
             
             # Description/Bullets
             for bullet in proj.get('bullets', []):
                 if bullet:
-                    bullet_para = doc.add_paragraph(style="List Bullet")
-                    bullet_para.add_run(_strip_bullet_prefix(_clean_docx_text(str(bullet))))
-                    bullet_para.paragraph_format.space_after = Pt(2)
+                    btxt = _clean_docx_text(str(bullet))
+                    m = re.search(r"(https?://[^\s]+)", btxt)
+                    if m:
+                        u = m.group(1)
+                        desc = btxt.replace(u, "").strip(" -|")
+                        if desc:
+                            _add_bullet_paragraph(doc, f"{desc} | {u}")
+                        else:
+                            _add_bullet_paragraph(doc, u)
+                    else:
+                        _add_bullet_paragraph(doc, btxt)
     
     # ==================== EDUCATION ====================
     education = parsed.get('education', [])
@@ -1005,16 +1093,16 @@ def generate_resume_docx(
             edu_para.paragraph_format.space_after = Pt(4)
             
             # Degree (bold)
-            degree_run = edu_para.add_run(edu.get('degree', ''))
+            degree_run = edu_para.add_run(_clean_docx_text(edu.get('degree', '')))
             degree_run.bold = True
             
             # School
-            school = edu.get('school', '')
+            school = _clean_docx_text(edu.get('school', ''))
             if school:
-                edu_para.add_run(f"  —  {school}")
+                edu_para.add_run(f" | {school}")
             
             # Dates
-            dates = edu.get('dates', '')
+            dates = _clean_docx_text(edu.get('dates', ''))
             if dates:
                 edu_para.add_run(f"  ({dates})")
     
@@ -1024,21 +1112,15 @@ def generate_resume_docx(
         _add_section_header(doc, 'Certifications')
         
         for cert in certifications:
-            cert_para = doc.add_paragraph(style="List Bullet")
-            
-            # Cert name (bold)
-            name_run = cert_para.add_run(_clean_docx_text(cert.get('name', '')))
-            name_run.bold = True
-            
-            # Issuer and date
-            issuer = cert.get('issuer', '')
-            date = cert.get('date', '')
+            # Render as a single bullet line for consistency
+            parts = [_clean_docx_text(cert.get("name", ""))]
+            issuer = _clean_docx_text(cert.get("issuer", ""))
+            date = _clean_docx_text(cert.get("date", ""))
             if issuer:
-                cert_para.add_run(f"  —  {_clean_docx_text(issuer)}")
+                parts.append(issuer)
             if date:
-                cert_para.add_run(f"  ({_clean_docx_text(date)})")
-            
-            cert_para.paragraph_format.space_after = Pt(2)
+                parts.append(date)
+            _add_bullet_paragraph(doc, " - ".join([p for p in parts if p]))
     
     # ==================== ACHIEVEMENTS ====================
     achievements = parsed.get('achievements', [])
@@ -1047,9 +1129,7 @@ def generate_resume_docx(
         
         for achievement in achievements:
             if achievement:
-                ach_para = doc.add_paragraph(style="List Bullet")
-                ach_para.add_run(_strip_bullet_prefix(_clean_docx_text(achievement)))
-                ach_para.paragraph_format.space_after = Pt(2)
+                _add_bullet_paragraph(doc, achievement)
     
     # Save to BytesIO
     buffer = BytesIO()
