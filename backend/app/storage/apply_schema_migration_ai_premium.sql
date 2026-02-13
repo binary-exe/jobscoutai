@@ -1,6 +1,14 @@
 -- Migration: Premium AI features (cache + guardrails) (idempotent)
 -- Run this after apply_schema.sql
 
+-- Allow Premium AI action types in usage_ledger (for quota tracking)
+ALTER TABLE usage_ledger DROP CONSTRAINT IF EXISTS usage_ledger_action_type_check;
+ALTER TABLE usage_ledger ADD CONSTRAINT usage_ledger_action_type_check
+    CHECK (action_type IN (
+        'apply_pack', 'docx_export', 'trust_report',
+        'ai_interview_coach', 'ai_template'
+    ));
+
 CREATE TABLE IF NOT EXISTS ai_generation_cache (
     cache_key TEXT PRIMARY KEY,
     user_id UUID REFERENCES users(user_id) ON DELETE CASCADE,

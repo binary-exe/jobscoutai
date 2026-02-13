@@ -181,7 +181,7 @@ CREATE INDEX IF NOT EXISTS idx_application_feedback_created_at ON application_fe
 CREATE TABLE IF NOT EXISTS usage_ledger (
     usage_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    action_type TEXT NOT NULL CHECK (action_type IN ('apply_pack', 'docx_export', 'trust_report')),
+    action_type TEXT NOT NULL CHECK (action_type IN ('apply_pack', 'docx_export', 'trust_report', 'ai_interview_coach', 'ai_template')),
     apply_pack_id UUID REFERENCES apply_packs(apply_pack_id) ON DELETE SET NULL,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
