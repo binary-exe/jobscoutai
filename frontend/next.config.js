@@ -3,6 +3,15 @@ const path = require('path')
 
 const nextConfig = {
   output: 'standalone',
+  // Proxy API to backend so browser uses same origin (no CORS / no 502 preflight)
+  async rewrites() {
+    return [
+      {
+        source: '/api/v1/:path*',
+        destination: 'https://jobscout-api.fly.dev/api/v1/:path*',
+      },
+    ]
+  },
   images: {
     remotePatterns: [
       {
