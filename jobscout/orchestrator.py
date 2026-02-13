@@ -276,22 +276,24 @@ async def run_scrape(
             if browser_fetcher:
                 await browser_fetcher.start()
 
-            # ===================== Discovery =====================
-            log("Running discovery...")
+            # ===================== Discovery (optional) =====================
             discovered = {"lever_sites": [], "greenhouse_tokens": [], "ashby_slugs": [], "recruitee_companies": [], "other_urls": []}
-
-            if HAS_DDGS:
-                try:
-                    discovered = discover_all(criteria)
-                    log(f"  Discovered: {len(discovered['lever_sites'])} Lever, "
-                        f"{len(discovered['greenhouse_tokens'])} Greenhouse, "
-                        f"{len(discovered['ashby_slugs'])} Ashby, "
-                        f"{len(discovered['recruitee_companies'])} Recruitee, "
-                        f"{len(discovered['other_urls'])} other URLs")
-                except Exception as e:
-                    log(f"  Discovery failed: {e}")
+            if criteria.enable_discovery:
+                log("Running discovery...")
+                if HAS_DDGS:
+                    try:
+                        discovered = discover_all(criteria)
+                        log(f"  Discovered: {len(discovered['lever_sites'])} Lever, "
+                            f"{len(discovered['greenhouse_tokens'])} Greenhouse, "
+                            f"{len(discovered['ashby_slugs'])} Ashby, "
+                            f"{len(discovered['recruitee_companies'])} Recruitee, "
+                            f"{len(discovered['other_urls'])} other URLs")
+                    except Exception as e:
+                        log(f"  Discovery failed: {e}")
+                else:
+                    log("  Skipping discovery (duckduckgo_search not installed)")
             else:
-                log("  Skipping discovery (duckduckgo_search not installed)")
+                log("Skipping discovery (disabled)")
 
             # ===================== Build Provider List =====================
             providers: List[Provider] = []

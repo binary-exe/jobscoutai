@@ -101,6 +101,11 @@ export async function parseJob(jobUrl?: string, jobText?: string): Promise<Parse
   });
 }
 
+/** Get a job target by ID (e.g. from extension save). Returns ParsedJob shape for Apply page. */
+export async function getJobTarget(jobTargetId: string): Promise<ParsedJob> {
+  return apiRequest<ParsedJob>(`/apply/job/target/${jobTargetId}`);
+}
+
 export async function importJobFromJobScout(job: {
   job_id?: string;
   job_url?: string;
@@ -167,8 +172,31 @@ export interface TrustReport {
   scam_score?: number;
   ghost_score?: number;
   apply_link_status?: string;
+  apply_link_final_url?: string;
+  apply_link_redirects?: number;
+  apply_link_cached?: boolean;
+  apply_link_warnings?: string[];
   domain_consistency_reasons?: string[];
   trust_score?: number;
+  verified_at?: string;
+  confidence?: {
+    scam?: number;
+    ghost?: number;
+    staleness?: number;
+    domain?: number;
+    overall?: number;
+  };
+  community?: {
+    reports_total: number;
+    accurate_total: number;
+    inaccurate_total: number;
+    reports_scam: number;
+    reports_ghost: number;
+    reports_expired: number;
+    [k: string]: number;
+  };
+  community_reasons?: string[];
+  next_steps?: string[];
 }
 
 export async function generateTrustReport(
@@ -182,6 +210,24 @@ export async function generateTrustReport(
   return apiRequest<TrustReport>(`/apply/job/${jobTargetId}/trust${suffix}`, {
     method: 'POST',
   });
+}
+
+export async function submitTrustFeedback(
+  jobTargetId: string,
+  feedback: {
+    feedback_kind: 'report' | 'accuracy';
+    dimension?: 'overall' | 'scam' | 'ghost' | 'staleness' | 'link';
+    value?: string;
+    comment?: string;
+  }
+): Promise<{ ok: boolean; community: Record<string, number> }> {
+  return apiRequest<{ ok: boolean; community: Record<string, number> }>(
+    `/apply/job/${jobTargetId}/trust/feedback`,
+    {
+      method: 'POST',
+      body: JSON.stringify(feedback),
+    }
+  );
 }
 
 export interface ApplyPack {
@@ -275,6 +321,8 @@ export async function exportApplyPackDocx(applyPackId: string, format: 'resume' 
 
 export interface Application {
   application_id: string;
+  apply_pack_id?: string | null;
+  job_target_id?: string | null;
   status: 'applied' | 'interview' | 'offer' | 'rejected' | 'withdrawn';
   title?: string;
   company?: string;
@@ -285,6 +333,9 @@ export interface Application {
   rejected_at?: string;
   notes?: string;
   reminder_at?: string;
+  contact_email?: string | null;
+  contact_linkedin_url?: string | null;
+  contact_phone?: string | null;
 }
 
 export async function createApplication(
@@ -313,11 +364,85 @@ export async function getApplications(status?: string): Promise<{ applications: 
 
 export async function updateApplication(
   applicationId: string,
-  updates: { status?: string; notes?: string; reminder_at?: string }
+  updates: {
+    status?: string;
+    notes?: string;
+    reminder_at?: string | null;
+    contact_email?: string | null;
+    contact_linkedin_url?: string | null;
+    contact_phone?: string | null;
+  }
 ): Promise<Application> {
   return apiRequest<Application>(`/apply/application/${applicationId}`, {
     method: 'PUT',
     body: JSON.stringify(updates),
+  });
+}
+
+export type ApplicationInsights = {
+  by_type: Record<string, number>;
+  reason_counts: Record<string, number>;
+};
+
+export async function getApplicationInsights(): Promise<ApplicationInsights> {
+  return apiRequest<ApplicationInsights>('/apply/insights');
+}
+
+// ==================== Premium AI (optional) ====================
+
+export type InterviewCoachResult = {
+  cached: boolean;
+  cache_key: string;
+  tokens_used?: number;
+  result: {
+    questions?: Array<{
+      type?: string;
+      question?: string;
+      why_they_ask?: string;
+      what_good_looks_like?: string[];
+      red_flags?: string[];
+      difficulty?: string;
+    }>;
+    rubric?: Array<{ dimension?: string; how_to_score?: string }>;
+    suggested_stories?: Array<{ story_prompt?: string; STAR_outline?: Record<string, string> }>;
+    next_steps?: string[];
+    [k: string]: unknown;
+  };
+};
+
+export async function generateInterviewCoach(opts: {
+  resume_text: string;
+  job_target_id?: string;
+  job_text?: string;
+}): Promise<InterviewCoachResult> {
+  return apiRequest<InterviewCoachResult>('/apply/ai/interview-coach', {
+    method: 'POST',
+    body: JSON.stringify(opts),
+  });
+}
+
+export type PremiumTemplateResult = {
+  cached: boolean;
+  cache_key: string;
+  tokens_used?: number;
+  result: {
+    template_id?: string;
+    tone?: string;
+    content?: string;
+    [k: string]: unknown;
+  };
+};
+
+export async function generatePremiumTemplate(opts: {
+  template_id: string;
+  tone?: string;
+  resume_text: string;
+  job_target_id?: string;
+  job_text?: string;
+}): Promise<PremiumTemplateResult> {
+  return apiRequest<PremiumTemplateResult>('/apply/ai/template', {
+    method: 'POST',
+    body: JSON.stringify(opts),
   });
 }
 

@@ -120,11 +120,22 @@ class Settings(BaseSettings):
     public_scrape_default_location: str = "Remote"
     public_scrape_max_results_per_source: int = 100
     public_scrape_concurrency: int = 8
+
+    # Enrichment controls (cost guardrails)
+    # Default OFF to avoid per-job fanout; can be enabled explicitly via env for trusted/admin runs.
+    scrape_enrich_company_pages: bool = False
+    scrape_max_enrichment_pages: int = 2
     
     # Enabled providers (optional allowlist). If empty => use all built-in providers.
     # Default to stable sources: remotive, remoteok, arbeitnow, weworkremotely
     # NOTE: Union[...] prevents pydantic-settings from crashing on non-JSON env strings.
-    enabled_providers: Union[str, List[str], None] = ["remotive", "remoteok", "arbeitnow", "weworkremotely"]
+    enabled_providers: Union[str, List[str], None] = [
+        "remotive",
+        "remoteok",
+        "arbeitnow",
+        "weworkremotely",
+        "workingnomads",
+    ]
 
     @field_validator("enabled_providers", mode="before")
     @classmethod
@@ -158,6 +169,11 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-4o-mini"
     ai_enabled: bool = False
     ai_max_jobs: int = 50  # Cost control
+
+    # Premium AI (Apply Workspace add-ons; quota-gated + cached)
+    premium_ai_enabled: bool = False
+    premium_ai_max_tokens_interview: int = 1200
+    premium_ai_max_tokens_template: int = 900
 
     # Embeddings (pgvector personalization)
     embeddings_enabled: bool = False

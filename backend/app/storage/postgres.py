@@ -8,6 +8,7 @@ from datetime import datetime
 from typing import Any, Dict, List, Optional, Tuple
 
 import asyncpg
+from pathlib import Path
 
 
 # ==================== Schema ====================
@@ -98,8 +99,86 @@ CREATE TABLE IF NOT EXISTS runs (
 
 
 async def init_schema(conn: asyncpg.Connection) -> None:
-    """Initialize database schema."""
+    """Initialize database schema (JobScout + Apply Workspace + analytics).
+
+    Designed to be idempotent and safe on startup.
+    """
     await conn.execute(CREATE_JOBS_TABLE)
+
+    # --- Apply Workspace schema + migrations ---
+    storage_dir = Path(__file__).resolve().parent
+
+    async def _exec_sql_file(filename: str) -> None:
+        path = storage_dir / filename
+        if not path.exists():
+            return
+        sql = path.read_text(encoding="utf-8")
+        if not sql.strip():
+            return
+        try:
+            await conn.execute(sql)
+        except Exception as e:
+            # Best-effort: don't crash app on migration edge cases
+            print(f"[DB] Apply schema step failed ({filename}): {e}")
+
+    # Base schema (tables, indexes)
+    await _exec_sql_file("apply_schema.sql")
+
+    # Migrations (idempotent; safe if already applied)
+    for fname in [
+        "apply_schema_migration_trust_applications_mvp.sql",
+        "apply_schema_migration_html.sql",
+        "apply_schema_migration_profiles.sql",
+        "apply_schema_migration_pack_topups.sql",
+        "apply_schema_migration_referrals.sql",
+        "apply_schema_migration_retention.sql",
+        "apply_schema_migration_trust_feedback.sql",
+        "apply_schema_migration_ai_premium.sql",
+        "apply_schema_migration_contacts.sql",
+    ]:
+        await _exec_sql_file(fname)
+
+    # Remove legacy constraint that blocks pro/pro_plus/etc plans.
+    try:
+        await conn.execute("ALTER TABLE users DROP CONSTRAINT IF EXISTS users_plan_check;")
+    except Exception as e:
+        print(f"[DB] Could not drop legacy users_plan_check: {e}")
+
+    # Optional: pgvector personalization migration (best-effort)
+    await _exec_sql_file("pgvector_migration_personalization.sql")
+
+    # --- Low-cost product analytics (Postgres) ---
+    try:
+        await conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS analytics_events (
+                event_id BIGSERIAL PRIMARY KEY,
+                occurred_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                client_ts TIMESTAMPTZ,
+                event_name TEXT NOT NULL,
+                user_id UUID,
+                distinct_id TEXT,
+                path TEXT,
+                properties JSONB
+            );
+
+            CREATE INDEX IF NOT EXISTS idx_analytics_events_occurred_at ON analytics_events(occurred_at DESC);
+            CREATE INDEX IF NOT EXISTS idx_analytics_events_event_name ON analytics_events(event_name);
+            CREATE INDEX IF NOT EXISTS idx_analytics_events_user_id ON analytics_events(user_id);
+
+            CREATE OR REPLACE VIEW analytics_daily_events AS
+            SELECT
+                date_trunc('day', occurred_at) AS day,
+                event_name,
+                COUNT(*) AS events,
+                COUNT(DISTINCT user_id) AS users
+            FROM analytics_events
+            GROUP BY 1, 2
+            ORDER BY day DESC, events DESC;
+            """
+        )
+    except Exception as e:
+        print(f"[DB] Analytics schema init failed: {e}")
 
 
 # ==================== Upsert Operations ====================

@@ -283,6 +283,86 @@ async def get_job_target_by_hash(conn: asyncpg.Connection, job_hash: str) -> Opt
     return dict(row) if row else None
 
 
+async def get_job_target(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    job_target_id: UUID,
+) -> Optional[Dict[str, Any]]:
+    """Get a job target by ID, scoped to the owner."""
+    row = await conn.fetchrow(
+        "SELECT * FROM job_targets WHERE job_target_id = $1 AND user_id = $2",
+        job_target_id,
+        user_id,
+    )
+    return dict(row) if row else None
+
+
+# ==================== Premium AI Cache ====================
+
+async def get_ai_generation_cache(
+    conn: asyncpg.Connection,
+    cache_key: str,
+) -> Optional[Dict[str, Any]]:
+    """Get a cached AI response by key (best-effort; returns None if missing)."""
+    try:
+        row = await conn.fetchrow(
+            """
+            SELECT *
+            FROM ai_generation_cache
+            WHERE cache_key = $1
+              AND (expires_at IS NULL OR expires_at > NOW())
+            """,
+            cache_key,
+        )
+        return dict(row) if row else None
+    except Exception:
+        # Table might not exist yet (migration not run) or other non-fatal issues
+        return None
+
+
+async def upsert_ai_generation_cache(
+    conn: asyncpg.Connection,
+    cache_key: str,
+    user_id: UUID,
+    feature: str,
+    model: Optional[str],
+    request_hash: Optional[str],
+    request_json: Optional[Dict[str, Any]],
+    response_json: Dict[str, Any],
+    tokens_used: int = 0,
+    expires_at: Optional[datetime] = None,
+) -> None:
+    """Upsert a cached AI response (best-effort)."""
+    try:
+        await conn.execute(
+            """
+            INSERT INTO ai_generation_cache
+              (cache_key, user_id, feature, model, request_hash, request_json, response_json, tokens_used, expires_at)
+            VALUES
+              ($1, $2, $3, $4, $5, $6::jsonb, $7::jsonb, $8, $9)
+            ON CONFLICT (cache_key)
+            DO UPDATE SET
+              response_json = EXCLUDED.response_json,
+              tokens_used = EXCLUDED.tokens_used,
+              model = EXCLUDED.model,
+              expires_at = EXCLUDED.expires_at,
+              created_at = NOW()
+            """,
+            cache_key,
+            user_id,
+            feature,
+            model,
+            request_hash,
+            json.dumps(request_json) if request_json is not None else None,
+            json.dumps(response_json),
+            int(tokens_used or 0),
+            expires_at,
+        )
+    except Exception:
+        # Table might not exist yet (migration not run) or other non-fatal issues
+        return
+
+
 # ==================== Trust Reports ====================
 
 async def create_trust_report(
@@ -333,6 +413,83 @@ async def get_trust_report(conn: asyncpg.Connection, job_target_id: UUID) -> Opt
         job_target_id
     )
     return dict(row) if row else None
+
+
+# ==================== Trust Report Feedback (Community) ====================
+
+async def create_trust_report_feedback(
+    conn: asyncpg.Connection,
+    job_target_id: UUID,
+    user_id: Optional[UUID],
+    feedback_kind: str,
+    dimension: str = "overall",
+    value: Optional[str] = None,
+    comment: Optional[str] = None,
+) -> Optional[Dict[str, Any]]:
+    """
+    Insert a community feedback row for a Trust Report.
+
+    Best-effort: if the migration hasn't been applied yet, return None.
+    """
+    try:
+        row = await conn.fetchrow(
+            """
+            INSERT INTO trust_report_feedback
+              (job_target_id, user_id, feedback_kind, dimension, value, comment)
+            VALUES
+              ($1, $2, $3, $4, $5, $6)
+            RETURNING *
+            """,
+            job_target_id,
+            user_id,
+            feedback_kind,
+            dimension,
+            value,
+            comment,
+        )
+        return dict(row) if row else None
+    except Exception:
+        # Table might not exist yet (migration not run) or other non-fatal issues
+        return None
+
+
+async def get_trust_report_feedback_summary(
+    conn: asyncpg.Connection,
+    job_target_id: UUID,
+) -> Dict[str, int]:
+    """
+    Fetch aggregated feedback for a job_target_id from the view created by
+    `apply_schema_migration_trust_feedback.sql`.
+
+    Best-effort: if the view/table doesn't exist yet, return zeros.
+    """
+    defaults: Dict[str, int] = {
+        "reports_total": 0,
+        "accurate_total": 0,
+        "inaccurate_total": 0,
+        "reports_scam": 0,
+        "reports_ghost": 0,
+        "reports_expired": 0,
+    }
+
+    try:
+        row = await conn.fetchrow(
+            "SELECT * FROM trust_report_feedback_summary WHERE job_target_id = $1",
+            job_target_id,
+        )
+        if not row:
+            return defaults
+
+        # Normalize to stable int keys for the frontend
+        result = defaults.copy()
+        for k in result.keys():
+            try:
+                result[k] = int(row.get(k, 0) or 0)  # type: ignore[attr-defined]
+            except Exception:
+                result[k] = 0
+        return result
+    except Exception:
+        return defaults
 
 
 # ==================== Apply Packs ====================
@@ -422,6 +579,9 @@ async def create_application(
     status: str = "applied",
     notes: Optional[str] = None,
     reminder_at: Optional[datetime] = None,
+    contact_email: Optional[str] = None,
+    contact_linkedin_url: Optional[str] = None,
+    contact_phone: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Create a tracked application."""
     application_id = uuid4()
@@ -429,11 +589,13 @@ async def create_application(
     row = await conn.fetchrow(
         """
         INSERT INTO applications 
-        (application_id, user_id, apply_pack_id, job_target_id, status, notes, reminder_at)
-        VALUES ($1, $2, $3, $4, $5, $6, $7)
+        (application_id, user_id, apply_pack_id, job_target_id, status, notes, reminder_at,
+         contact_email, contact_linkedin_url, contact_phone)
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
         RETURNING *
         """,
         application_id, user_id, apply_pack_id, job_target_id, status, notes, reminder_at,
+        contact_email, contact_linkedin_url, contact_phone,
     )
     return dict(row)
 
@@ -534,6 +696,44 @@ async def get_user_feedback_summary(
     return [dict(row) for row in rows]
 
 
+async def get_user_feedback_insights(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+) -> Dict[str, Any]:
+    """
+    Aggregate feedback for the user: counts by feedback_type and by reason_categories.
+    Used for recommendation cards (e.g. most common rejection reasons).
+    """
+    by_type_rows = await conn.fetch(
+        """
+        SELECT af.feedback_type, COUNT(*) AS cnt
+        FROM application_feedback af
+        JOIN applications a ON af.application_id = a.application_id
+        WHERE a.user_id = $1
+        GROUP BY af.feedback_type
+        """,
+        user_id,
+    )
+    by_type = {row["feedback_type"]: row["cnt"] for row in by_type_rows}
+
+    reason_rows = await conn.fetch(
+        """
+        SELECT elem AS reason, COUNT(*) AS cnt
+        FROM application_feedback af
+        JOIN applications a ON af.application_id = a.application_id,
+        LATERAL jsonb_array_elements_text(COALESCE(af.parsed_json->'reason_categories', '[]'::jsonb)) AS elem
+        WHERE a.user_id = $1
+        GROUP BY elem
+        ORDER BY cnt DESC
+        LIMIT 15
+        """,
+        user_id,
+    )
+    reason_counts = {row["reason"]: row["cnt"] for row in reason_rows}
+
+    return {"by_type": by_type, "reason_counts": reason_counts}
+
+
 # ==================== Usage Ledger ====================
 
 async def record_usage(
@@ -622,24 +822,35 @@ async def check_user_quota(
             "docx_export": 0,  # Not allowed on free
             "tracking": 5,  # 5 active applications for free users
             "trust_report": None,  # Unlimited
+            # Premium AI (disabled for free by default)
+            "ai_interview_coach": 0,
+            "ai_template": 0,
         },
         "pro": {
             "apply_pack": 30,
             "docx_export": None,  # Unlimited
             "tracking": None,  # Unlimited
             "trust_report": None,  # Unlimited
+            # Premium AI (quota-gated)
+            "ai_interview_coach": 20,
+            "ai_template": 40,
         },
         "pro_plus": {
             "apply_pack": 100,
             "docx_export": None,  # Unlimited
             "tracking": None,  # Unlimited
             "trust_report": None,  # Unlimited
+            # Premium AI (higher caps)
+            "ai_interview_coach": 100,
+            "ai_template": 200,
         },
         "annual": {
             "apply_pack": 30,  # Same as pro
             "docx_export": None,  # Unlimited
             "tracking": None,  # Unlimited
             "trust_report": None,  # Unlimited
+            "ai_interview_coach": 20,
+            "ai_template": 40,
         },
         # Legacy support
         "paid": {
@@ -647,6 +858,8 @@ async def check_user_quota(
             "docx_export": None,
             "tracking": None,
             "trust_report": None,
+            "ai_interview_coach": 20,
+            "ai_template": 40,
         },
     }
     

@@ -6,7 +6,7 @@ import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { FileText, Link as LinkIcon, Sparkles, CheckCircle2, AlertTriangle, Clock, Loader2, Edit2, Save, Shield, AlertCircle } from 'lucide-react';
 import Link from 'next/link';
-import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, uploadResume, importJobFromJobScout, createApplication, getHistory, type ParsedJob, type ApplyPack, type TrustReport } from '@/lib/apply-api';
+import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, submitTrustFeedback, uploadResume, importJobFromJobScout, createApplication, getHistory, getJobTarget, generateInterviewCoach, generatePremiumTemplate, type ParsedJob, type ApplyPack, type TrustReport, type InterviewCoachResult, type PremiumTemplateResult } from '@/lib/apply-api';
 import type { JobDetail } from '@/lib/api';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getProfile, getResume } from '@/lib/profile-api';
@@ -31,16 +31,25 @@ export default function ApplyWorkspacePage() {
   const [applyPack, setApplyPack] = useState<ApplyPack | null>(null);
   const [trustReport, setTrustReport] = useState<TrustReport | null>(null);
   const [isGeneratingTrust, setIsGeneratingTrust] = useState(false);
+  const [isSubmittingTrustFeedback, setIsSubmittingTrustFeedback] = useState(false);
+  const [trustFeedbackNotice, setTrustFeedbackNotice] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [uploadedFileName, setUploadedFileName] = useState<string | null>(null);
   const [isImporting, setIsImporting] = useState(false);
-  // Prevent infinite retry loops: attempt auto-import at most once per jobId
+  // Prevent infinite retry loops: attempt auto-import at most once per jobId / job_target_id
   const [autoImportAttemptedJobId, setAutoImportAttemptedJobId] = useState<string | null>(null);
+  const [autoLoadAttemptedJobTargetId, setAutoLoadAttemptedJobTargetId] = useState<string | null>(null);
   const [trackedApplicationId, setTrackedApplicationId] = useState<string | null>(null);
   const [isTracking, setIsTracking] = useState(false);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [hasProfile, setHasProfile] = useState(false);
+  const [interviewCoachResult, setInterviewCoachResult] = useState<InterviewCoachResult | null>(null);
+  const [isGeneratingInterviewCoach, setIsGeneratingInterviewCoach] = useState(false);
+  const [templateResult, setTemplateResult] = useState<PremiumTemplateResult | null>(null);
+  const [templateType, setTemplateType] = useState<'cover_letter' | 'follow_up_email'>('cover_letter');
+  const [templateTone, setTemplateTone] = useState<'professional' | 'technical' | 'enthusiastic'>('professional');
+  const [isGeneratingTemplate, setIsGeneratingTemplate] = useState(false);
 
   // Auth check - redirect to login if not authenticated
   useEffect(() => {
@@ -169,6 +178,37 @@ export default function ApplyWorkspacePage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [searchParams, parsedJob, isImporting, autoImportAttemptedJobId, authChecked, isAuthenticated]);
 
+  // Deep-link: load job target by ID (e.g. from extension "Open Apply")
+  useEffect(() => {
+    if (!authChecked || !isAuthenticated) return;
+    const jobTargetId = searchParams?.get('job_target_id');
+    if (!jobTargetId || parsedJob || jobTargetId === autoLoadAttemptedJobTargetId) return;
+    setAutoLoadAttemptedJobTargetId(jobTargetId);
+    (async () => {
+      try {
+        const result = await getJobTarget(jobTargetId);
+        setParsedJob(result);
+        setEditedJob({
+          title: result.title,
+          company: result.company,
+          location: result.location,
+          remote_type: result.remote_type,
+          employment_type: result.employment_type,
+          salary_min: result.salary_min,
+          salary_max: result.salary_max,
+          salary_currency: result.salary_currency,
+          description_text: result.description_text,
+        });
+        if (result.job_url) setJobUrl(result.job_url);
+        if (result.description_text) setJobText(result.description_text);
+        handleGenerateTrustReport(result.job_target_id);
+      } catch {
+        setAutoLoadAttemptedJobTargetId(null);
+      }
+    })();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [authChecked, isAuthenticated, searchParams, parsedJob, autoLoadAttemptedJobTargetId]);
+
   const handleImportFromJobScout = async (jobId: string) => {
     setIsImporting(true);
     setError(null);
@@ -273,6 +313,7 @@ export default function ApplyWorkspacePage() {
     opts: { force?: boolean; refresh_apply_link?: boolean } = {}
   ) => {
     setIsGeneratingTrust(true);
+    setTrustFeedbackNotice(null);
     try {
       const report = await generateTrustReport(jobTargetId, opts);
       setTrustReport(report);
@@ -283,6 +324,29 @@ export default function ApplyWorkspacePage() {
       console.error('Failed to generate trust report:', err);
     } finally {
       setIsGeneratingTrust(false);
+    }
+  };
+
+  const confidenceLabel = (n?: number) => {
+    if (n === undefined || n === null) return null;
+    if (n >= 80) return 'High';
+    if (n >= 60) return 'Medium';
+    return 'Low';
+  };
+
+  const handleSubmitTrustFeedback = async (payload: Parameters<typeof submitTrustFeedback>[1]) => {
+    if (!parsedJob) return;
+    setIsSubmittingTrustFeedback(true);
+    setTrustFeedbackNotice(null);
+    try {
+      const res = await submitTrustFeedback(parsedJob.job_target_id, payload);
+      setTrustReport((prev) => (prev ? { ...prev, community: res.community as any } : prev));
+      setTrustFeedbackNotice('Thanks — your feedback helps improve Trust Reports.');
+      trackEvent('trust_report_feedback_submitted', { ...payload, job_target_id: parsedJob.job_target_id });
+    } catch (err) {
+      setTrustFeedbackNotice(err instanceof Error ? err.message : 'Failed to submit feedback');
+    } finally {
+      setIsSubmittingTrustFeedback(false);
     }
   };
 
@@ -333,6 +397,62 @@ export default function ApplyWorkspacePage() {
 
   const handleDragOver = (e: React.DragEvent<HTMLDivElement>) => {
     e.preventDefault();
+  };
+
+  const handleGenerateInterviewCoach = async () => {
+    if (!resumeText.trim() || !parsedJob) return;
+    setIsGeneratingInterviewCoach(true);
+    setInterviewCoachResult(null);
+    setError(null);
+    try {
+      const res = await generateInterviewCoach({
+        resume_text: resumeText,
+        job_target_id: parsedJob.job_target_id,
+      });
+      setInterviewCoachResult(res);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Request failed';
+      if (msg.includes('403') || msg.includes('quota') || msg.includes('Premium AI quota')) {
+        setError('Interview Coach quota used or not available on your plan. Upgrade for more.');
+      } else if (msg.includes('404') || msg.includes('disabled')) {
+        setError('Interview Coach is not enabled on this server.');
+      } else if (msg.includes('503') || msg.includes('not configured')) {
+        setError('AI is not configured. Contact support.');
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setIsGeneratingInterviewCoach(false);
+    }
+  };
+
+  const handleGenerateTemplate = async () => {
+    if (!resumeText.trim() || !parsedJob) return;
+    setIsGeneratingTemplate(true);
+    setTemplateResult(null);
+    setError(null);
+    try {
+      const res = await generatePremiumTemplate({
+        resume_text: resumeText,
+        job_target_id: parsedJob.job_target_id,
+        template_id: templateType,
+        tone: templateTone,
+      });
+      setTemplateResult(res);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : 'Request failed';
+      if (msg.includes('403') || msg.includes('quota') || msg.includes('Premium AI quota')) {
+        setError('Template quota used or not available on your plan. Upgrade for more.');
+      } else if (msg.includes('404') || msg.includes('disabled')) {
+        setError('Premium AI templates are not enabled on this server.');
+      } else if (msg.includes('503') || msg.includes('not configured')) {
+        setError('AI is not configured. Contact support.');
+      } else {
+        setError(msg);
+      }
+    } finally {
+      setIsGeneratingTemplate(false);
+    }
   };
 
   const handleGeneratePack = async () => {
@@ -428,8 +548,8 @@ export default function ApplyWorkspacePage() {
               Apply Workspace
             </h1>
             <p className="mt-3 text-muted-foreground max-w-2xl mx-auto">
-              Upload your resume and paste a job link or description. Get ATS-ready tailored content, 
-              a Trust Report, and track your applications.
+              Upload your resume and paste a job link or description. Get ATS-ready tailored content,
+              a Trust Report, and track your applications. Don&apos;t waste time on ghost or scam jobs—check trust first.
             </p>
           </div>
 
@@ -772,12 +892,100 @@ export default function ApplyWorkspacePage() {
                   </div>
                   
                   <div className="space-y-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground">
+                      <div>
+                        {trustReport.verified_at ? (() => {
+                          const verified = new Date(trustReport.verified_at);
+                          const now = new Date();
+                          const days = Math.floor((now.getTime() - verified.getTime()) / (24 * 60 * 60 * 1000));
+                          if (days === 0) return <>Last verified today</>;
+                          if (days === 1) return <>Last verified 1 day ago</>;
+                          return <>Last verified {days} days ago</>;
+                        })() : (
+                          <>Verified recently</>
+                        )}
+                      </div>
+                      {trustReport.confidence?.overall !== undefined && (
+                        <div>
+                          Confidence: <span className="text-foreground">{confidenceLabel(trustReport.confidence.overall)} ({trustReport.confidence.overall}%)</span>
+                        </div>
+                      )}
+                    </div>
+
                     {(trustReport.trust_score !== undefined && trustReport.trust_score !== null) && (
                       <div className="flex items-center justify-between rounded-lg bg-muted/30 p-3">
                         <span className="text-sm font-medium">Overall trust score</span>
                         <span className="text-sm font-semibold">{trustReport.trust_score}/100</span>
                       </div>
                     )}
+
+                    {/* Community feedback */}
+                    <div className="rounded-lg border border-border bg-background p-3">
+                      <div className="flex items-center justify-between gap-3">
+                        <div className="text-sm font-medium">Community</div>
+                        <div className="text-xs text-muted-foreground">
+                          Reports: <span className="text-foreground">{trustReport.community?.reports_total ?? 0}</span>
+                          {' · '}
+                          Accurate: <span className="text-foreground">{trustReport.community?.accurate_total ?? 0}</span>
+                          {' · '}
+                          Inaccurate: <span className="text-foreground">{trustReport.community?.inaccurate_total ?? 0}</span>
+                        </div>
+                      </div>
+                      {trustReport.community_reasons && trustReport.community_reasons.length > 0 && (
+                        <ul className="mt-2 text-xs text-muted-foreground space-y-1 list-disc pl-5">
+                          {trustReport.community_reasons.map((r, i) => (
+                            <li key={i}>{r}</li>
+                          ))}
+                        </ul>
+                      )}
+                      <div className="mt-3 flex flex-wrap gap-2">
+                        <button
+                          type="button"
+                          disabled={isSubmittingTrustFeedback}
+                          onClick={() => handleSubmitTrustFeedback({ feedback_kind: 'accuracy', value: 'accurate' })}
+                          className="text-xs rounded-lg border border-border px-3 py-1.5 hover:bg-muted disabled:opacity-50"
+                        >
+                          This was accurate
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSubmittingTrustFeedback}
+                          onClick={() => handleSubmitTrustFeedback({ feedback_kind: 'accuracy', value: 'inaccurate' })}
+                          className="text-xs rounded-lg border border-border px-3 py-1.5 hover:bg-muted disabled:opacity-50"
+                        >
+                          Inaccurate
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSubmittingTrustFeedback}
+                          onClick={() => handleSubmitTrustFeedback({ feedback_kind: 'report', value: 'scam' })}
+                          className="text-xs rounded-lg border border-border px-3 py-1.5 hover:bg-muted disabled:opacity-50"
+                        >
+                          Report scam
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSubmittingTrustFeedback}
+                          onClick={() => handleSubmitTrustFeedback({ feedback_kind: 'report', value: 'ghost' })}
+                          className="text-xs rounded-lg border border-border px-3 py-1.5 hover:bg-muted disabled:opacity-50"
+                        >
+                          Report ghost
+                        </button>
+                        <button
+                          type="button"
+                          disabled={isSubmittingTrustFeedback}
+                          onClick={() => handleSubmitTrustFeedback({ feedback_kind: 'report', value: 'expired' })}
+                          className="text-xs rounded-lg border border-border px-3 py-1.5 hover:bg-muted disabled:opacity-50"
+                        >
+                          Report expired
+                        </button>
+                      </div>
+                      {trustFeedbackNotice && (
+                        <div className="mt-2 text-xs text-muted-foreground">
+                          {trustFeedbackNotice}
+                        </div>
+                      )}
+                    </div>
 
                     {trustReport.apply_link_status && (
                       <div className="text-xs text-muted-foreground">
@@ -791,6 +999,7 @@ export default function ApplyWorkspacePage() {
                           <AlertCircle className="h-4 w-4 text-hybrid" />
                           Domain consistency warnings
                         </div>
+                        <p className="text-xs text-muted-foreground mb-1.5">Why we flagged this:</p>
                         <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-5">
                           {trustReport.domain_consistency_reasons.map((reason, i) => (
                             <li key={i}>{reason}</li>
@@ -812,14 +1021,17 @@ export default function ApplyWorkspacePage() {
                         </span>
                       </div>
                       {trustReport.scam_reasons.length > 0 && (
-                        <ul className="text-xs text-muted-foreground space-y-1">
-                          {trustReport.scam_reasons.map((reason, i) => (
-                            <li key={i} className="flex items-start gap-1">
-                              <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                              <span>{reason}</span>
-                            </li>
-                          ))}
-                        </ul>
+                        <>
+                          <p className="text-xs text-muted-foreground mb-1.5">Why we flagged this:</p>
+                          <ul className="text-xs text-muted-foreground space-y-1">
+                            {trustReport.scam_reasons.map((reason, i) => (
+                              <li key={i} className="flex items-start gap-1">
+                                <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                <span>{reason}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
                       )}
                     </div>
                     
@@ -836,14 +1048,17 @@ export default function ApplyWorkspacePage() {
                         </span>
                       </div>
                       {trustReport.ghost_reasons.length > 0 && (
-                        <ul className="text-xs text-muted-foreground space-y-1">
-                          {trustReport.ghost_reasons.map((reason, i) => (
-                            <li key={i} className="flex items-start gap-1">
-                              <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                              <span>{reason}</span>
-                            </li>
-                          ))}
-                        </ul>
+                        <>
+                          <p className="text-xs text-muted-foreground mb-1.5">Why we flagged this:</p>
+                          <ul className="text-xs text-muted-foreground space-y-1">
+                            {trustReport.ghost_reasons.map((reason, i) => (
+                              <li key={i} className="flex items-start gap-1">
+                                <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                <span>{reason}</span>
+                              </li>
+                            ))}
+                          </ul>
+                        </>
                       )}
                     </div>
                     
@@ -861,15 +1076,30 @@ export default function ApplyWorkspacePage() {
                           </span>
                         </div>
                         {trustReport.staleness_reasons && trustReport.staleness_reasons.length > 0 && (
-                          <ul className="text-xs text-muted-foreground space-y-1">
-                            {trustReport.staleness_reasons.map((reason, i) => (
-                              <li key={i} className="flex items-start gap-1">
-                                <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
-                                <span>{reason}</span>
-                              </li>
-                            ))}
-                          </ul>
+                          <>
+                            <p className="text-xs text-muted-foreground mb-1.5">Why we flagged this:</p>
+                            <ul className="text-xs text-muted-foreground space-y-1">
+                              {trustReport.staleness_reasons.map((reason, i) => (
+                                <li key={i} className="flex items-start gap-1">
+                                  <AlertCircle className="h-3 w-3 shrink-0 mt-0.5" />
+                                  <span>{reason}</span>
+                                </li>
+                              ))}
+                            </ul>
+                          </>
                         )}
+                      </div>
+                    )}
+
+                    {/* Next steps (actionable checklist from plan) */}
+                    {trustReport.next_steps && trustReport.next_steps.length > 0 && (
+                      <div className="rounded-lg border border-primary/20 bg-primary/5 p-3">
+                        <h3 className="text-sm font-medium mb-2">Next steps</h3>
+                        <ul className="text-xs text-muted-foreground space-y-1.5 list-disc pl-5">
+                          {trustReport.next_steps.map((step, i) => (
+                            <li key={i}>{step}</li>
+                          ))}
+                        </ul>
                       </div>
                     )}
                   </div>
@@ -1100,6 +1330,143 @@ export default function ApplyWorkspacePage() {
                   <p className="text-sm text-muted-foreground">
                     Parse a job and generate an Apply Pack to see tailored content.
                   </p>
+                </div>
+              )}
+
+              {/* Interview Coach (Premium AI) */}
+              {parsedJob && resumeText.trim().length > 50 && (
+                <div className="rounded-xl border border-border bg-card p-6">
+                  <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                    <Sparkles className="h-5 w-5 text-primary" />
+                    Interview Coach
+                  </h2>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Get practice questions and a scoring rubric based on your resume and this job (Premium AI, quota-gated).
+                  </p>
+                  {!interviewCoachResult ? (
+                    <button
+                      type="button"
+                      onClick={handleGenerateInterviewCoach}
+                      disabled={isGeneratingInterviewCoach}
+                      className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                    >
+                      {isGeneratingInterviewCoach ? 'Generating…' : 'Generate interview prep'}
+                    </button>
+                  ) : (
+                    <div className="space-y-4">
+                      {interviewCoachResult.cached && (
+                        <p className="text-xs text-muted-foreground">From cache (no quota used)</p>
+                      )}
+                      {interviewCoachResult.result.questions && interviewCoachResult.result.questions.length > 0 && (
+                        <div>
+                          <h3 className="text-sm font-medium mb-2">Sample questions</h3>
+                          <ul className="space-y-3 text-sm">
+                            {interviewCoachResult.result.questions.slice(0, 6).map((q, i) => (
+                              <li key={i} className="rounded-lg border border-border bg-background p-3">
+                                <p className="font-medium text-foreground">{q.question || 'Question'}</p>
+                                {q.why_they_ask && <p className="text-xs text-muted-foreground mt-1">Why: {q.why_they_ask}</p>}
+                                {q.what_good_looks_like && q.what_good_looks_like.length > 0 && (
+                                  <p className="text-xs text-muted-foreground mt-1">Good answer: {q.what_good_looks_like.slice(0, 2).join('; ')}</p>
+                                )}
+                              </li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      {interviewCoachResult.result.rubric && interviewCoachResult.result.rubric.length > 0 && (
+                        <div>
+                          <h3 className="text-sm font-medium mb-2">Scoring rubric</h3>
+                          <ul className="text-xs text-muted-foreground space-y-1 list-disc pl-5">
+                            {interviewCoachResult.result.rubric.slice(0, 4).map((r, i) => (
+                              <li key={i}>{r.dimension || r.how_to_score}</li>
+                            ))}
+                          </ul>
+                        </div>
+                      )}
+                      <button
+                        type="button"
+                        onClick={() => setInterviewCoachResult(null)}
+                        className="text-xs text-muted-foreground hover:text-foreground"
+                      >
+                        Generate again
+                      </button>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Templates (Premium AI) - cover letter / follow-up tone */}
+              {parsedJob && resumeText.trim().length > 50 && (
+                <div className="rounded-xl border border-border bg-card p-6">
+                  <h2 className="text-lg font-semibold mb-2 flex items-center gap-2">
+                    <FileText className="h-5 w-5 text-primary" />
+                    Tone & templates
+                  </h2>
+                  <p className="text-xs text-muted-foreground mb-3">
+                    Generate a cover letter or follow-up email in your chosen tone (Premium AI, quota-gated).
+                  </p>
+                  {!templateResult ? (
+                    <div className="space-y-3">
+                      <div>
+                        <label className="block text-xs font-medium text-muted-foreground mb-1">Type</label>
+                        <select
+                          value={templateType}
+                          onChange={(e) => setTemplateType(e.target.value as 'cover_letter' | 'follow_up_email')}
+                          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="cover_letter">Cover letter</option>
+                          <option value="follow_up_email">Follow-up email</option>
+                        </select>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-medium text-muted-foreground mb-1">Tone</label>
+                        <select
+                          value={templateTone}
+                          onChange={(e) => setTemplateTone(e.target.value as 'professional' | 'technical' | 'enthusiastic')}
+                          className="w-full rounded-lg border border-input bg-background px-3 py-2 text-sm"
+                        >
+                          <option value="professional">Professional</option>
+                          <option value="technical">Technical</option>
+                          <option value="enthusiastic">Enthusiastic</option>
+                        </select>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={handleGenerateTemplate}
+                        disabled={isGeneratingTemplate}
+                        className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        {isGeneratingTemplate ? 'Generating…' : 'Generate'}
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {templateResult.cached && (
+                        <p className="text-xs text-muted-foreground">From cache (no quota used)</p>
+                      )}
+                      {templateResult.result.content && (
+                        <div className="rounded-lg border border-border bg-background p-3">
+                          <p className="text-sm text-foreground whitespace-pre-wrap">{templateResult.result.content}</p>
+                        </div>
+                      )}
+                      <div className="flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => templateResult.result.content && navigator.clipboard.writeText(templateResult.result.content)}
+                          className="rounded-lg border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                        >
+                          Copy
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => setTemplateResult(null)}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          Generate again
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </div>
               )}
             </div>

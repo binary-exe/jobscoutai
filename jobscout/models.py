@@ -241,6 +241,7 @@ class Criteria:
     max_results_per_source: int = 200
     max_discovered_ats_tokens: int = 40
     max_search_results: int = 60
+    enable_discovery: bool = False  # DuckDuckGo-based ATS discovery (optional; off by default)
 
     # Enrichment
     enrich_company_pages: bool = True

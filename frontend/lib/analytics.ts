@@ -16,6 +16,7 @@
  */
 
 import posthog from 'posthog-js';
+import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
 // Initialize PostHog only on client side
 let initialized = false;
@@ -74,6 +75,68 @@ export function initAnalytics() {
   }
 }
 
+// ==================== Server-side capture (Postgres) ====================
+
+const METRICS_URL = `${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/metrics/event`;
+
+function getOrCreateDistinctId(): string | null {
+  if (typeof window === 'undefined') return null;
+  try {
+    const key = 'jobscout_distinct_id';
+    const existing = window.localStorage.getItem(key);
+    if (existing) return existing;
+    const id = (globalThis.crypto?.randomUUID?.() || `${Date.now()}-${Math.random()}`).toString();
+    window.localStorage.setItem(key, id);
+    return id;
+  } catch {
+    return null;
+  }
+}
+
+async function serverCapture(eventName: string, properties?: Record<string, unknown>) {
+  if (typeof window === 'undefined') return;
+  try {
+    const distinctId = getOrCreateDistinctId();
+    const path = window.location?.pathname || undefined;
+
+    let token: string | null = null;
+    if (isSupabaseConfigured()) {
+      const { data } = await supabase.auth.getSession();
+      token = data.session?.access_token || null;
+    }
+
+    // Fire-and-forget; ignore failures.
+    fetch(METRICS_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
+      body: JSON.stringify({
+        event_name: eventName,
+        properties: properties || {},
+        distinct_id: distinctId,
+        path,
+        client_ts: new Date().toISOString(),
+      }),
+      keepalive: true,
+    }).catch(() => undefined);
+  } catch {
+    // swallow
+  }
+}
+
+function capture(eventName: string, properties?: Record<string, unknown>) {
+  if (isAnalyticsReady()) {
+    posthog.capture(eventName, {
+      ...properties,
+      timestamp: new Date().toISOString(),
+    });
+  }
+  // Always attempt server-side capture (even when PostHog disabled)
+  serverCapture(eventName, properties);
+}
+
 // Check if analytics is ready
 export function isAnalyticsReady(): boolean {
   return initialized && !initializationFailed && typeof window !== 'undefined';
@@ -110,191 +173,115 @@ export function setUserProperties(properties: Record<string, unknown>) {
  * Track when user signs up (creates account)
  */
 export function trackSignUp(method: 'email' | 'google' = 'email') {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('user_signed_up', {
-    method,
-    timestamp: new Date().toISOString(),
-  });
+  capture('user_signed_up', { method });
 }
 
 /**
  * Track when user completes their profile
  */
 export function trackProfileCompleted(hasResume: boolean) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('profile_completed', {
-    has_resume: hasResume,
-    timestamp: new Date().toISOString(),
-  });
+  capture('profile_completed', { has_resume: hasResume });
 }
 
 /**
  * Track when user views a job
  */
 export function trackJobViewed(jobId: string, jobTitle?: string, company?: string) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('job_viewed', {
-    job_id: jobId,
-    job_title: jobTitle,
-    company,
-    timestamp: new Date().toISOString(),
-  });
+  capture('job_viewed', { job_id: jobId, job_title: jobTitle, company });
 }
 
 /**
  * Track when user opens Apply Workspace
  */
 export function trackApplyWorkspaceOpened(source: 'direct' | 'job_card' | 'job_detail') {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('apply_workspace_opened', {
-    source,
-    timestamp: new Date().toISOString(),
-  });
+  capture('apply_workspace_opened', { source });
 }
 
 /**
  * Track when user imports a job into Apply Workspace
  */
 export function trackJobImported(jobId: string, method: 'url_parse' | 'text_paste' | 'jobscout_import') {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('job_imported', {
-    job_id: jobId,
-    method,
-    timestamp: new Date().toISOString(),
-  });
+  capture('job_imported', { job_id: jobId, method });
 }
 
 /**
  * Track when user generates a Trust Report
  */
 export function trackTrustReportGenerated(jobTargetId: string, trustScore?: number) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('trust_report_generated', {
-    job_target_id: jobTargetId,
-    trust_score: trustScore,
-    timestamp: new Date().toISOString(),
-  });
+  capture('trust_report_generated', { job_target_id: jobTargetId, trust_score: trustScore });
 }
 
 /**
  * Track when user creates their first Apply Pack (key activation event!)
  */
 export function trackFirstApplyPackCreated(applyPackId: string) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('first_apply_pack_created', {
-    apply_pack_id: applyPackId,
-    timestamp: new Date().toISOString(),
-  });
+  capture('first_apply_pack_created', { apply_pack_id: applyPackId });
   
   // Also set user property for segmentation
-  posthog.people.set({
-    first_apply_pack_date: new Date().toISOString(),
-    has_created_apply_pack: true,
-  });
+  if (isAnalyticsReady()) {
+    posthog.people.set({
+      first_apply_pack_date: new Date().toISOString(),
+      has_created_apply_pack: true,
+    });
+  }
 }
 
 /**
  * Track when user creates any Apply Pack
  */
 export function trackApplyPackCreated(applyPackId: string, packNumber: number) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('apply_pack_created', {
-    apply_pack_id: applyPackId,
-    pack_number: packNumber,
-    timestamp: new Date().toISOString(),
-  });
+  capture('apply_pack_created', { apply_pack_id: applyPackId, pack_number: packNumber });
 }
 
 /**
  * Track when user downloads DOCX (paid feature)
  */
 export function trackDocxDownloaded(applyPackId: string, format: 'resume' | 'cover' | 'combined') {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('docx_downloaded', {
-    apply_pack_id: applyPackId,
-    format,
-    timestamp: new Date().toISOString(),
-  });
+  capture('docx_downloaded', { apply_pack_id: applyPackId, format });
 }
 
 /**
  * Track when user starts tracking an application
  */
 export function trackApplicationTracked(applicationId: string) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('application_tracked', {
-    application_id: applicationId,
-    timestamp: new Date().toISOString(),
-  });
+  capture('application_tracked', { application_id: applicationId });
 }
 
 /**
  * Track when user views upgrade/pricing prompt
  */
 export function trackUpgradePromptViewed(source: 'quota_limit' | 'docx_paywall' | 'tracking_limit' | 'pricing_page') {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('upgrade_prompt_viewed', {
-    source,
-    timestamp: new Date().toISOString(),
-  });
+  capture('upgrade_prompt_viewed', { source });
 }
 
 /**
  * Track when user clicks upgrade button
  */
 export function trackUpgradeClicked(plan: string, source: string) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('upgrade_clicked', {
-    plan,
-    source,
-    timestamp: new Date().toISOString(),
-  });
+  capture('upgrade_clicked', { plan, source });
 }
 
 /**
  * Track when user completes a paid subscription
  */
 export function trackSubscriptionStarted(plan: string, amount: number, currency: string) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('subscription_started', {
-    plan,
-    amount,
-    currency,
-    timestamp: new Date().toISOString(),
-  });
+  capture('subscription_started', { plan, amount, currency });
   
   // Set user properties
-  posthog.people.set({
-    plan,
-    subscription_started_at: new Date().toISOString(),
-    is_paying_customer: true,
-  });
+  if (isAnalyticsReady()) {
+    posthog.people.set({
+      plan,
+      subscription_started_at: new Date().toISOString(),
+      is_paying_customer: true,
+    });
+  }
 }
 
 /**
  * Track when user cancels subscription
  */
 export function trackSubscriptionCancelled(plan: string, reason?: string) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('subscription_cancelled', {
-    plan,
-    reason,
-    timestamp: new Date().toISOString(),
-  });
+  capture('subscription_cancelled', { plan, reason });
 }
 
 // ==================== Referral Events ====================
@@ -303,23 +290,14 @@ export function trackSubscriptionCancelled(plan: string, reason?: string) {
  * Track referral link copied
  */
 export function trackReferralLinkCopied() {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('referral_link_copied', {
-    timestamp: new Date().toISOString(),
-  });
+  capture('referral_link_copied', {});
 }
 
 /**
  * Track referral signup
  */
 export function trackReferralSignup(referrerId: string) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('referral_signup', {
-    referrer_id: referrerId,
-    timestamp: new Date().toISOString(),
-  });
+  capture('referral_signup', { referrer_id: referrerId });
 }
 
 // ==================== Retention Events ====================
@@ -328,36 +306,21 @@ export function trackReferralSignup(referrerId: string) {
  * Track weekly digest email opened
  */
 export function trackWeeklyDigestOpened() {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('weekly_digest_opened', {
-    timestamp: new Date().toISOString(),
-  });
+  capture('weekly_digest_opened', {});
 }
 
 /**
  * Track saved search created
  */
 export function trackSavedSearchCreated(searchId: string, filters: Record<string, unknown>) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('saved_search_created', {
-    search_id: searchId,
-    filters,
-    timestamp: new Date().toISOString(),
-  });
+  capture('saved_search_created', { search_id: searchId, filters });
 }
 
 /**
  * Track job alert created
  */
 export function trackJobAlertCreated(alertId: string) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture('job_alert_created', {
-    alert_id: alertId,
-    timestamp: new Date().toISOString(),
-  });
+  capture('job_alert_created', { alert_id: alertId });
 }
 
 // ==================== Feature Usage Events ====================
@@ -374,12 +337,7 @@ export function isFeatureEnabled(flagName: string): boolean {
  * Generic event tracker for custom events
  */
 export function trackEvent(eventName: string, properties?: Record<string, unknown>) {
-  if (!isAnalyticsReady()) return;
-  
-  posthog.capture(eventName, {
-    ...properties,
-    timestamp: new Date().toISOString(),
-  });
+  capture(eventName, properties);
 }
 
 // Export posthog instance for advanced usage

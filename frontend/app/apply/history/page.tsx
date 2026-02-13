@@ -6,7 +6,7 @@ import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { Clock, FileText, ExternalLink, Copy, Download, CheckCircle2, XCircle, Calendar, Briefcase, MessageSquare, Plus, Loader2 } from 'lucide-react';
 import Link from 'next/link';
-import { getHistory, exportApplyPackDocx, getApplications, getApplicationFeedback, createApplicationFeedback, updateApplication, type Application, type ApplyPackHistory, type ApplicationFeedback } from '@/lib/apply-api';
+import { getHistory, exportApplyPackDocx, getApplications, getApplicationFeedback, createApplicationFeedback, updateApplication, createApplication, getApplicationInsights, type Application, type ApplyPackHistory, type ApplicationFeedback, type ApplicationInsights } from '@/lib/apply-api';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 
 export default function HistoryPage() {
@@ -27,6 +27,11 @@ export default function HistoryPage() {
   const [isSubmittingFeedback, setIsSubmittingFeedback] = useState(false);
   const [reasonCategories, setReasonCategories] = useState<string[]>([]);
   const [signals, setSignals] = useState<string[]>([]);
+  const [notesDraft, setNotesDraft] = useState<Record<string, string>>({});
+  const [savingNotes, setSavingNotes] = useState<string | null>(null);
+  const [contactDraft, setContactDraft] = useState<Record<string, { email: string; linkedin: string; phone: string }>>({});
+  const [savingContact, setSavingContact] = useState<string | null>(null);
+  const [insights, setInsights] = useState<ApplicationInsights | null>(null);
 
   // Auth check - redirect to login if not authenticated
   useEffect(() => {
@@ -74,12 +79,14 @@ export default function HistoryPage() {
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [packsData, appsData] = await Promise.all([
+      const [packsData, appsData, insightsData] = await Promise.all([
         getHistory().catch(() => ({ packs: [], total: 0 })),
         getApplications().catch(() => ({ applications: [], total: 0 })),
+        getApplicationInsights().catch(() => ({ by_type: {}, reason_counts: {} })),
       ]);
       setPacks(packsData.packs || []);
       setApplications(appsData.applications || []);
+      setInsights(insightsData);
     } catch (err) {
       console.error('Failed to fetch data:', err);
     } finally {
@@ -183,6 +190,59 @@ export default function HistoryPage() {
     'fast_response',
     'referral',
   ];
+
+  const toLocalDateTimeInput = (iso?: string) => {
+    if (!iso) return '';
+    try {
+      const d = new Date(iso);
+      const pad = (n: number) => String(n).padStart(2, '0');
+      return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`;
+    } catch {
+      return '';
+    }
+  };
+
+  const downloadIcs = (title: string, startsAtIso: string) => {
+    try {
+      const dt = new Date(startsAtIso);
+      const toIcsTs = (d: Date) => {
+        const pad = (n: number) => String(n).padStart(2, '0');
+        return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
+      };
+
+      const uid = `jobscout-${Math.random().toString(36).slice(2)}@jobscout`;
+      const now = toIcsTs(new Date());
+      const start = toIcsTs(dt);
+      const end = toIcsTs(new Date(dt.getTime() + 30 * 60 * 1000)); // +30m default
+
+      const ics = [
+        'BEGIN:VCALENDAR',
+        'VERSION:2.0',
+        'PRODID:-//JobScoutAI//Apply Tracker//EN',
+        'CALSCALE:GREGORIAN',
+        'BEGIN:VEVENT',
+        `UID:${uid}`,
+        `DTSTAMP:${now}`,
+        `DTSTART:${start}`,
+        `DTEND:${end}`,
+        `SUMMARY:${title.replace(/\n/g, ' ')}`,
+        'END:VEVENT',
+        'END:VCALENDAR',
+      ].join('\r\n');
+
+      const blob = new Blob([ics], { type: 'text/calendar;charset=utf-8' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${title.slice(0, 40).replace(/[^a-z0-9-_ ]/gi, '').trim() || 'reminder'}.ics`;
+      document.body.appendChild(a);
+      a.click();
+      URL.revokeObjectURL(url);
+      document.body.removeChild(a);
+    } catch {
+      alert('Failed to export calendar invite');
+    }
+  };
 
   // Show loading while checking auth
   if (!authChecked) {
@@ -316,7 +376,7 @@ export default function HistoryPage() {
               <Briefcase className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
               <h3 className="font-semibold mb-2">No tracked applications yet</h3>
               <p className="text-sm text-muted-foreground mb-4">
-                Start tracking your applications to stay organized.
+                Start tracking your applications to stay organized. Your tracker is a Kanban board (Saved → Applied → Interview → Offer → Rejected).
               </p>
               <Link
                 href="/apply"
@@ -327,234 +387,454 @@ export default function HistoryPage() {
             </div>
           ) : activeTab === 'applications' ? (
             <div className="space-y-4">
-              {applications.map((app) => {
-                const appFeedback = feedback[app.application_id] || [];
-                const isSelected = selectedApplication === app.application_id;
-                
-                return (
-                  <div 
-                    key={app.application_id} 
-                    className={`rounded-xl border border-border bg-card p-6 ${isSelected ? 'ring-2 ring-primary' : ''}`}
-                  >
-                    <div className="flex items-start justify-between">
-                      <div className="flex-1">
-                        <div className="flex items-center gap-2 mb-2">
-                          {getStatusIcon(app.status)}
-                          <h3 className="font-semibold">
-                            {app.title || 'Untitled Job'}
-                          </h3>
-                          <span className={`text-xs px-2 py-0.5 rounded ${
-                            app.status === 'offer' ? 'bg-green-500/20 text-green-500' :
-                            app.status === 'rejected' ? 'bg-red-500/20 text-red-500' :
-                            app.status === 'interview' ? 'bg-blue-500/20 text-blue-500' :
-                            'bg-muted text-muted-foreground'
-                          }`}>
-                            {app.status}
-                          </span>
-                        </div>
-                        {app.company && (
-                          <p className="text-sm text-muted-foreground mb-2">{app.company}</p>
-                        )}
-                        <div className="flex items-center gap-4 text-xs text-muted-foreground">
-                          {app.applied_at && (
-                            <div className="flex items-center gap-1">
-                              <Clock className="h-3 w-3" />
-                              Applied {new Date(app.applied_at).toLocaleDateString()}
-                            </div>
-                          )}
-                          {app.interview_at && (
-                            <div className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
-                              Interview {new Date(app.interview_at).toLocaleDateString()}
-                            </div>
-                          )}
-                          {app.offer_at && (
-                            <div className="flex items-center gap-1">
-                              <CheckCircle2 className="h-3 w-3" />
-                              Offer {new Date(app.offer_at).toLocaleDateString()}
-                            </div>
-                          )}
-                          {app.rejected_at && (
-                            <div className="flex items-center gap-1">
-                              <XCircle className="h-3 w-3" />
-                              Rejected {new Date(app.rejected_at).toLocaleDateString()}
-                            </div>
-                          )}
-                          {app.reminder_at && (
-                            <div className="flex items-center gap-1">
-                              <Calendar className="h-3 w-3" />
-                              Reminder: {new Date(app.reminder_at).toLocaleDateString()}
-                            </div>
-                          )}
-                        </div>
-                        {app.notes && (
-                          <p className="text-sm text-muted-foreground mt-2">{app.notes}</p>
-                        )}
-                        
-                        {/* Feedback Section */}
-                        {appFeedback.length > 0 && (
-                          <div className="mt-4 pt-4 border-t border-border">
-                            <h4 className="text-sm font-medium mb-2 flex items-center gap-2">
-                              <MessageSquare className="h-4 w-4" />
-                              Feedback ({appFeedback.length})
-                            </h4>
-                            <div className="space-y-2">
-                              {appFeedback.map((fb) => (
-                                <div key={fb.feedback_id} className="text-xs bg-muted/50 p-2 rounded">
-                                  <div className="flex items-center justify-between mb-1">
-                                    <span className="font-medium capitalize">{fb.feedback_type}</span>
-                                    {fb.created_at && (
-                                      <span className="text-muted-foreground">
-                                        {new Date(fb.created_at).toLocaleDateString()}
-                                      </span>
-                                    )}
-                                  </div>
-                                  {fb.raw_text && (
-                                    <p className="text-muted-foreground mb-1">{fb.raw_text}</p>
-                                  )}
-                                  {fb.parsed_json?.reason_categories && fb.parsed_json.reason_categories.length > 0 && (
-                                    <div className="mt-1">
-                                      <span className="text-muted-foreground">Reasons: </span>
-                                      <span className="text-foreground">
-                                        {fb.parsed_json.reason_categories.join(', ')}
-                                      </span>
-                                    </div>
-                                  )}
-                                </div>
-                              ))}
-                            </div>
-                          </div>
-                        )}
-
-                        {/* Load feedback (lazy) */}
-                        {appFeedback.length === 0 && (
-                          <button
-                            onClick={() => {
-                              setSelectedApplication(app.application_id);
-                              loadFeedback(app.application_id);
-                            }}
-                            className="mt-4 flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground"
-                          >
-                            <MessageSquare className="h-4 w-4" />
-                            Load feedback
-                          </button>
-                        )}
-                        
-                        {/* Add Feedback Form */}
-                        {showFeedbackForm === app.application_id ? (
-                          <div className="mt-4 pt-4 border-t border-border space-y-2">
-                            <select
-                              value={feedbackType}
-                              onChange={(e) => setFeedbackType(e.target.value as any)}
-                              className="w-full rounded border border-input bg-background px-2 py-1 text-sm"
-                            >
-                              <option value="rejection">Rejection</option>
-                              <option value="shortlisted">Shortlisted</option>
-                              <option value="offer">Offer</option>
-                              <option value="no_response">No Response</option>
-                              <option value="withdrawn">Withdrawn</option>
-                            </select>
-                            <textarea
-                              value={feedbackText}
-                              onChange={(e) => setFeedbackText(e.target.value)}
-                              placeholder="Paste rejection email, feedback, or notes..."
-                              className="w-full min-h-[80px] rounded border border-input bg-background px-2 py-1 text-sm"
-                            />
-
-                            {/* Structured feedback chips */}
-                            <div className="space-y-2">
-                              <div>
-                                <div className="text-xs font-medium text-muted-foreground mb-1">Reason categories</div>
-                                <div className="flex flex-wrap gap-2">
-                                  {REASON_OPTIONS.map((opt) => (
-                                    <button
-                                      key={opt}
-                                      type="button"
-                                      onClick={() => setReasonCategories((prev) => toggle(prev, opt))}
-                                      className={`rounded-full px-3 py-1 text-xs border ${
-                                        reasonCategories.includes(opt)
-                                          ? 'bg-primary text-primary-foreground border-primary'
-                                          : 'bg-background border-border text-muted-foreground hover:text-foreground'
-                                      }`}
-                                    >
-                                      {opt.replace('_', ' ')}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-
-                              <div>
-                                <div className="text-xs font-medium text-muted-foreground mb-1">Signals</div>
-                                <div className="flex flex-wrap gap-2">
-                                  {SIGNAL_OPTIONS.map((opt) => (
-                                    <button
-                                      key={opt}
-                                      type="button"
-                                      onClick={() => setSignals((prev) => toggle(prev, opt))}
-                                      className={`rounded-full px-3 py-1 text-xs border ${
-                                        signals.includes(opt)
-                                          ? 'bg-primary text-primary-foreground border-primary'
-                                          : 'bg-background border-border text-muted-foreground hover:text-foreground'
-                                      }`}
-                                    >
-                                      {opt.replace('_', ' ')}
-                                    </button>
-                                  ))}
-                                </div>
-                              </div>
-                            </div>
-                            <div className="flex gap-2">
-                              <button
-                                onClick={() => handleSubmitFeedback(app.application_id)}
-                                disabled={isSubmittingFeedback}
-                                className="rounded bg-primary px-3 py-1 text-sm text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
-                              >
-                                {isSubmittingFeedback ? 'Submitting...' : 'Submit'}
-                              </button>
-                              <button
-                                onClick={() => {
-                                  setShowFeedbackForm(null);
-                                  setFeedbackText('');
-                                  setReasonCategories([]);
-                                  setSignals([]);
-                                }}
-                                className="rounded border border-border px-3 py-1 text-sm hover:bg-muted"
-                              >
-                                Cancel
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <button
-                            onClick={() => {
-                              setShowFeedbackForm(app.application_id);
-                              setSelectedApplication(app.application_id);
-                              loadFeedback(app.application_id);
-                            }}
-                            className="mt-4 flex items-center gap-2 text-sm text-primary hover:text-primary/80"
-                          >
-                            <Plus className="h-4 w-4" />
-                            Add Feedback
-                          </button>
-                        )}
-                      </div>
-                      <div className="flex items-center gap-2">
-                        {app.job_url && (
-                          <a
-                            href={app.job_url}
-                            target="_blank"
-                            rel="noopener noreferrer"
-                            className="p-2 rounded-lg border border-border hover:bg-muted"
-                            title="View Job"
-                          >
-                            <ExternalLink className="h-4 w-4" />
-                          </a>
-                        )}
-                      </div>
+              {/* Feedback-driven insights (recommendation cards) */}
+              {insights && (Object.keys(insights.by_type ?? {}).length > 0 || Object.keys(insights.reason_counts ?? {}).length > 0) && (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {Object.keys(insights.by_type ?? {}).length > 0 && (
+                    <div className="rounded-xl border border-border bg-card p-4">
+                      <h3 className="text-sm font-semibold mb-2">Outcomes</h3>
+                      <p className="text-xs text-muted-foreground mb-2">Feedback you&apos;ve recorded</p>
+                      <ul className="space-y-1 text-sm">
+                        {Object.entries(insights.by_type).map(([type, count]) => (
+                          <li key={type} className="flex justify-between">
+                            <span className="capitalize text-muted-foreground">{type.replace(/_/g, ' ')}</span>
+                            <span className="font-medium">{count}</span>
+                          </li>
+                        ))}
+                      </ul>
                     </div>
+                  )}
+                  {Object.keys(insights.reason_counts ?? {}).length > 0 && (
+                    <div className="rounded-xl border border-border bg-card p-4">
+                      <h3 className="text-sm font-semibold mb-2">Most common rejection reasons</h3>
+                      <p className="text-xs text-muted-foreground mb-2">Use this to focus your prep</p>
+                      <ul className="space-y-1 text-sm">
+                        {Object.entries(insights.reason_counts)
+                          .sort((a, b) => b[1] - a[1])
+                          .slice(0, 8)
+                          .map(([reason, count]) => (
+                            <li key={reason} className="flex justify-between">
+                              <span className="capitalize text-muted-foreground">{reason.replace(/_/g, ' ')}</span>
+                              <span className="font-medium">{count}</span>
+                            </li>
+                          ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Kanban board */}
+              <div className="text-sm text-muted-foreground">
+                Tip: move cards by changing status. Saved items are Apply Packs you haven’t started tracking yet.
+              </div>
+
+              {(() => {
+                const trackedPackIds = new Set(applications.map((a) => a.apply_pack_id).filter(Boolean) as string[]);
+                const saved = packs.filter((p) => !trackedPackIds.has(p.apply_pack_id));
+                const byStatus = (s: string) => applications.filter((a) => a.status === s);
+                const rejectedLike = applications.filter((a) => a.status === 'rejected' || a.status === 'withdrawn');
+
+                const columns: Array<{
+                  key: string;
+                  title: string;
+                  apps: Application[];
+                  packs?: ApplyPackHistory[];
+                }> = [
+                  { key: 'saved', title: `Saved (${saved.length})`, apps: [], packs: saved },
+                  { key: 'applied', title: `Applied (${byStatus('applied').length})`, apps: byStatus('applied') },
+                  { key: 'interview', title: `Interview (${byStatus('interview').length})`, apps: byStatus('interview') },
+                  { key: 'offer', title: `Offer (${byStatus('offer').length})`, apps: byStatus('offer') },
+                  { key: 'rejected', title: `Rejected (${rejectedLike.length})`, apps: rejectedLike },
+                ];
+
+                return (
+                  <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-5 gap-4">
+                    {columns.map((col) => (
+                      <div key={col.key} className="rounded-xl border border-border bg-card p-4">
+                        <div className="text-sm font-semibold mb-3">{col.title}</div>
+
+                        <div className="space-y-3">
+                          {/* Saved packs (not yet tracked) */}
+                          {col.key === 'saved' && col.packs?.map((p) => (
+                            <div key={p.apply_pack_id} className="rounded-lg border border-border bg-background p-3">
+                              <div className="text-sm font-medium">{p.title || 'Untitled Job'}</div>
+                              {p.company && <div className="text-xs text-muted-foreground">{p.company}</div>}
+                              <div className="mt-2 flex items-center justify-between gap-2">
+                                <div className="text-xs text-muted-foreground">
+                                  {new Date(p.created_at).toLocaleDateString()}
+                                </div>
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    try {
+                                      await createApplication(p.apply_pack_id, undefined, 'applied');
+                                      await fetchData();
+                                    } catch (err) {
+                                      alert(err instanceof Error ? err.message : 'Failed to start tracking');
+                                    }
+                                  }}
+                                  className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+                                >
+                                  Track
+                                </button>
+                              </div>
+                            </div>
+                          ))}
+
+                          {/* Application cards */}
+                          {col.apps.map((app) => (
+                            <div key={app.application_id} className="rounded-lg border border-border bg-background p-3">
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <div className="text-sm font-medium truncate">{app.title || 'Untitled Job'}</div>
+                                  {app.company && <div className="text-xs text-muted-foreground truncate">{app.company}</div>}
+                                </div>
+                                {app.job_url && (
+                                  <a
+                                    href={app.job_url}
+                                    target="_blank"
+                                    rel="noopener noreferrer"
+                                    className="shrink-0 p-1 rounded border border-border hover:bg-muted"
+                                    title="Open job link"
+                                  >
+                                    <ExternalLink className="h-3.5 w-3.5" />
+                                  </a>
+                                )}
+                              </div>
+
+                              <div className="mt-2 flex items-center justify-between gap-2">
+                                <div className="text-xs text-muted-foreground">
+                                  {app.applied_at ? `Applied ${new Date(app.applied_at).toLocaleDateString()}` : ''}
+                                </div>
+                                <select
+                                  value={app.status}
+                                  onChange={async (e) => {
+                                    const next = e.target.value;
+                                    try {
+                                      await updateApplication(app.application_id, { status: next });
+                                      await fetchData();
+                                    } catch (err) {
+                                      alert(err instanceof Error ? err.message : 'Failed to update status');
+                                    }
+                                  }}
+                                  className="rounded border border-input bg-background px-2 py-1 text-xs"
+                                >
+                                  <option value="applied">Applied</option>
+                                  <option value="interview">Interview</option>
+                                  <option value="offer">Offer</option>
+                                  <option value="rejected">Rejected</option>
+                                  <option value="withdrawn">Withdrawn</option>
+                                </select>
+                              </div>
+
+                              <div className="mt-2">
+                                <label className="block text-[11px] text-muted-foreground mb-1">Reminder</label>
+                                <div className="flex items-center gap-2">
+                                  <input
+                                    type="datetime-local"
+                                    defaultValue={toLocalDateTimeInput(app.reminder_at || undefined)}
+                                    className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                                    onBlur={async (e) => {
+                                      const v = e.currentTarget.value;
+                                      try {
+                                        await updateApplication(app.application_id, { reminder_at: v ? new Date(v).toISOString() : null });
+                                        await fetchData();
+                                      } catch (err) {
+                                        alert(err instanceof Error ? err.message : 'Failed to update reminder');
+                                      }
+                                    }}
+                                  />
+                                  {app.reminder_at && (
+                                    <button
+                                      type="button"
+                                      onClick={() => downloadIcs(`${app.title || 'Reminder'} — follow up`, app.reminder_at!)}
+                                      className="shrink-0 rounded border border-border px-2 py-1 text-xs hover:bg-muted"
+                                      title="Export to calendar (ICS)"
+                                    >
+                                      ICS
+                                    </button>
+                                  )}
+                                </div>
+                              </div>
+
+                              {/* Notes (recruiter/private notes on this application) */}
+                              <div className="mt-2">
+                                <label className="block text-[11px] text-muted-foreground mb-1">Notes</label>
+                                <textarea
+                                  value={notesDraft[app.application_id] ?? app.notes ?? ''}
+                                  onChange={(e) => setNotesDraft((prev) => ({ ...prev, [app.application_id]: e.target.value }))}
+                                  onBlur={async () => {
+                                    const value = notesDraft[app.application_id] ?? app.notes ?? '';
+                                    const current = (app.notes ?? '').trim();
+                                    if (value.trim() === current) return;
+                                    setSavingNotes(app.application_id);
+                                    try {
+                                      await updateApplication(app.application_id, { notes: value.trim() });
+                                      await fetchData();
+                                      setNotesDraft((prev) => {
+                                        const next = { ...prev };
+                                        delete next[app.application_id];
+                                        return next;
+                                      });
+                                    } catch (err) {
+                                      alert(err instanceof Error ? err.message : 'Failed to save notes');
+                                    } finally {
+                                      setSavingNotes(null);
+                                    }
+                                  }}
+                                  placeholder="Recruiter, contacts, follow-up…"
+                                  className="w-full min-h-[52px] rounded border border-input bg-background px-2 py-1 text-xs resize-y"
+                                />
+                                {savingNotes === app.application_id && (
+                                  <span className="text-[10px] text-muted-foreground">Saving…</span>
+                                )}
+                              </div>
+
+                              {/* Contact (recruiter/contact info) */}
+                              <div className="mt-2 space-y-1.5">
+                                <label className="block text-[11px] text-muted-foreground mb-1">Contact</label>
+                                <input
+                                  type="email"
+                                  value={contactDraft[app.application_id]?.email ?? app.contact_email ?? ''}
+                                  onChange={(e) => setContactDraft((prev) => ({
+                                    ...prev,
+                                    [app.application_id]: {
+                                      email: e.target.value,
+                                      linkedin: contactDraft[app.application_id]?.linkedin ?? app.contact_linkedin_url ?? '',
+                                      phone: contactDraft[app.application_id]?.phone ?? app.contact_phone ?? '',
+                                    },
+                                  }))}
+                                  onBlur={async () => {
+                                    const d = contactDraft[app.application_id];
+                                    const email = (d?.email ?? app.contact_email ?? '').trim();
+                                    const linkedin = (d?.linkedin ?? app.contact_linkedin_url ?? '').trim();
+                                    const phone = (d?.phone ?? app.contact_phone ?? '').trim();
+                                    const cur = [(app.contact_email ?? '').trim(), (app.contact_linkedin_url ?? '').trim(), (app.contact_phone ?? '').trim()];
+                                    if (email === cur[0] && linkedin === cur[1] && phone === cur[2]) return;
+                                    setSavingContact(app.application_id);
+                                    try {
+                                      await updateApplication(app.application_id, {
+                                        contact_email: email,
+                                        contact_linkedin_url: linkedin,
+                                        contact_phone: phone,
+                                      });
+                                      await fetchData();
+                                      setContactDraft((prev) => {
+                                        const next = { ...prev };
+                                        delete next[app.application_id];
+                                        return next;
+                                      });
+                                    } catch (err) {
+                                      alert(err instanceof Error ? err.message : 'Failed to save contact');
+                                    } finally {
+                                      setSavingContact(null);
+                                    }
+                                  }}
+                                  placeholder="Email"
+                                  className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                                />
+                                <input
+                                  type="url"
+                                  value={contactDraft[app.application_id]?.linkedin ?? app.contact_linkedin_url ?? ''}
+                                  onChange={(e) => setContactDraft((prev) => ({
+                                    ...prev,
+                                    [app.application_id]: {
+                                      email: contactDraft[app.application_id]?.email ?? app.contact_email ?? '',
+                                      linkedin: e.target.value,
+                                      phone: contactDraft[app.application_id]?.phone ?? app.contact_phone ?? '',
+                                    },
+                                  }))}
+                                  onBlur={async () => {
+                                    const d = contactDraft[app.application_id];
+                                    const email = (d?.email ?? app.contact_email ?? '').trim();
+                                    const linkedin = (d?.linkedin ?? app.contact_linkedin_url ?? '').trim();
+                                    const phone = (d?.phone ?? app.contact_phone ?? '').trim();
+                                    const cur = [(app.contact_email ?? '').trim(), (app.contact_linkedin_url ?? '').trim(), (app.contact_phone ?? '').trim()];
+                                    if (email === cur[0] && linkedin === cur[1] && phone === cur[2]) return;
+                                    setSavingContact(app.application_id);
+                                    try {
+                                      await updateApplication(app.application_id, {
+                                        contact_email: email,
+                                        contact_linkedin_url: linkedin,
+                                        contact_phone: phone,
+                                      });
+                                      await fetchData();
+                                      setContactDraft((prev) => {
+                                        const next = { ...prev };
+                                        delete next[app.application_id];
+                                        return next;
+                                      });
+                                    } catch (err) {
+                                      alert(err instanceof Error ? err.message : 'Failed to save contact');
+                                    } finally {
+                                      setSavingContact(null);
+                                    }
+                                  }}
+                                  placeholder="LinkedIn URL"
+                                  className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                                />
+                                <input
+                                  type="tel"
+                                  value={contactDraft[app.application_id]?.phone ?? app.contact_phone ?? ''}
+                                  onChange={(e) => setContactDraft((prev) => ({
+                                    ...prev,
+                                    [app.application_id]: {
+                                      email: contactDraft[app.application_id]?.email ?? app.contact_email ?? '',
+                                      linkedin: contactDraft[app.application_id]?.linkedin ?? app.contact_linkedin_url ?? '',
+                                      phone: e.target.value,
+                                    },
+                                  }))}
+                                  onBlur={async () => {
+                                    const d = contactDraft[app.application_id];
+                                    const email = (d?.email ?? app.contact_email ?? '').trim();
+                                    const linkedin = (d?.linkedin ?? app.contact_linkedin_url ?? '').trim();
+                                    const phone = (d?.phone ?? app.contact_phone ?? '').trim();
+                                    const cur = [(app.contact_email ?? '').trim(), (app.contact_linkedin_url ?? '').trim(), (app.contact_phone ?? '').trim()];
+                                    if (email === cur[0] && linkedin === cur[1] && phone === cur[2]) return;
+                                    setSavingContact(app.application_id);
+                                    try {
+                                      await updateApplication(app.application_id, {
+                                        contact_email: email,
+                                        contact_linkedin_url: linkedin,
+                                        contact_phone: phone,
+                                      });
+                                      await fetchData();
+                                      setContactDraft((prev) => {
+                                        const next = { ...prev };
+                                        delete next[app.application_id];
+                                        return next;
+                                      });
+                                    } catch (err) {
+                                      alert(err instanceof Error ? err.message : 'Failed to save contact');
+                                    } finally {
+                                      setSavingContact(null);
+                                    }
+                                  }}
+                                  placeholder="Phone"
+                                  className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                                />
+                                {savingContact === app.application_id && (
+                                  <span className="text-[10px] text-muted-foreground">Saving…</span>
+                                )}
+                              </div>
+
+                              <div className="mt-2 flex flex-wrap gap-2">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedApplication(app.application_id);
+                                    setShowFeedbackForm(app.application_id);
+                                    loadFeedback(app.application_id);
+                                  }}
+                                  className="rounded border border-border px-2 py-1 text-xs hover:bg-muted"
+                                >
+                                  Feedback
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setSelectedApplication(app.application_id);
+                                    loadFeedback(app.application_id);
+                                  }}
+                                  className="rounded border border-border px-2 py-1 text-xs hover:bg-muted"
+                                >
+                                  View feedback
+                                </button>
+                              </div>
+
+                              {/* Inline feedback form (re-uses existing UI state) */}
+                              {showFeedbackForm === app.application_id && (
+                                <div className="mt-3 pt-3 border-t border-border space-y-2">
+                                  <select
+                                    value={feedbackType}
+                                    onChange={(e) => setFeedbackType(e.target.value as any)}
+                                    className="w-full rounded border border-input bg-background px-2 py-1 text-xs"
+                                  >
+                                    <option value="rejection">Rejection</option>
+                                    <option value="shortlisted">Shortlisted</option>
+                                    <option value="offer">Offer</option>
+                                    <option value="no_response">No Response</option>
+                                    <option value="withdrawn">Withdrawn</option>
+                                  </select>
+                                  <textarea
+                                    value={feedbackText}
+                                    onChange={(e) => setFeedbackText(e.target.value)}
+                                    placeholder="Paste feedback (email/notes)..."
+                                    className="w-full min-h-[70px] rounded border border-input bg-background px-2 py-1 text-xs"
+                                  />
+
+                                  <div>
+                                    <div className="text-[11px] font-medium text-muted-foreground mb-1">Reasons</div>
+                                    <div className="flex flex-wrap gap-2">
+                                      {REASON_OPTIONS.map((opt) => (
+                                        <button
+                                          key={opt}
+                                          type="button"
+                                          onClick={() => setReasonCategories((prev) => toggle(prev, opt))}
+                                          className={`rounded-full px-3 py-1 text-[11px] border ${
+                                            reasonCategories.includes(opt)
+                                              ? 'bg-primary text-primary-foreground border-primary'
+                                              : 'bg-background border-border text-muted-foreground hover:text-foreground'
+                                          }`}
+                                        >
+                                          {opt.replace('_', ' ')}
+                                        </button>
+                                      ))}
+                                    </div>
+                                  </div>
+
+                                  <div className="flex gap-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSubmitFeedback(app.application_id)}
+                                      disabled={isSubmittingFeedback}
+                                      className="rounded bg-primary px-3 py-1.5 text-xs text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                                    >
+                                      {isSubmittingFeedback ? 'Submitting…' : 'Submit'}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setShowFeedbackForm(null);
+                                        setFeedbackText('');
+                                        setReasonCategories([]);
+                                        setSignals([]);
+                                      }}
+                                      className="rounded border border-border px-3 py-1.5 text-xs hover:bg-muted"
+                                    >
+                                      Close
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
+
+                              {/* Show loaded feedback summary */}
+                              {(feedback[app.application_id] || []).length > 0 && (
+                                <div className="mt-3 pt-3 border-t border-border">
+                                  <div className="text-[11px] text-muted-foreground mb-1">
+                                    Feedback entries: {(feedback[app.application_id] || []).length}
+                                  </div>
+                                  <div className="space-y-2">
+                                    {(feedback[app.application_id] || []).slice(0, 2).map((fb) => (
+                                      <div key={fb.feedback_id} className="text-[11px] text-muted-foreground">
+                                        <span className="text-foreground font-medium">{fb.feedback_type}</span>
+                                        {fb.parsed_json?.reason_categories?.length ? (
+                                          <> · {fb.parsed_json.reason_categories.slice(0, 3).join(', ')}</>
+                                        ) : null}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 );
-              })}
+              })()}
             </div>
           ) : null}
         </div>

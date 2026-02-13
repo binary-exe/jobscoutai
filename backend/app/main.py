@@ -3,6 +3,7 @@ FastAPI application entry point.
 """
 
 from contextlib import asynccontextmanager
+import re
 
 from fastapi import FastAPI, Request, status
 from fastapi.middleware.cors import CORSMiddleware
@@ -12,7 +13,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import db
-from backend.app.api import jobs, admin, apply, paddle, scrape, runs, profile, referrals, saved_searches
+from backend.app.api import jobs, admin, apply, paddle, scrape, runs, profile, referrals, saved_searches, metrics, premium_ai
 
 
 @asynccontextmanager
@@ -61,6 +62,17 @@ def create_app() -> FastAPI:
     """Create and configure the FastAPI app."""
     settings = get_settings()
 
+    # Allow browser extensions (Chrome/Edge) to call the API directly.
+    # We keep the standard web origins allowlist, and add a regex for extension origins.
+    _extension_origin_re = re.compile(r"^chrome-extension://[a-z0-9_-]+$", re.IGNORECASE)
+
+    def _is_allowed_origin(origin: str | None) -> bool:
+        if not origin:
+            return False
+        if origin in settings.cors_origins:
+            return True
+        return bool(_extension_origin_re.match(origin))
+
     app = FastAPI(
         title=settings.app_name,
         version="1.0.0",
@@ -72,6 +84,7 @@ def create_app() -> FastAPI:
     app.add_middleware(
         CORSMiddleware,
         allow_origins=settings.cors_origins,
+        allow_origin_regex=_extension_origin_re.pattern,
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
@@ -87,7 +100,7 @@ def create_app() -> FastAPI:
         )
         # Add CORS headers manually
         origin = request.headers.get("origin")
-        if origin and origin in settings.cors_origins:
+        if _is_allowed_origin(origin):
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
@@ -101,7 +114,7 @@ def create_app() -> FastAPI:
         )
         # Add CORS headers manually
         origin = request.headers.get("origin")
-        if origin and origin in settings.cors_origins:
+        if _is_allowed_origin(origin):
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
@@ -118,7 +131,7 @@ def create_app() -> FastAPI:
         )
         # Add CORS headers manually
         origin = request.headers.get("origin")
-        if origin and origin in settings.cors_origins:
+        if _is_allowed_origin(origin):
             response.headers["Access-Control-Allow-Origin"] = origin
             response.headers["Access-Control-Allow-Credentials"] = "true"
         return response
@@ -133,6 +146,8 @@ def create_app() -> FastAPI:
     app.include_router(runs.router, prefix=settings.api_prefix)
     app.include_router(referrals.router, prefix=settings.api_prefix)
     app.include_router(saved_searches.router, prefix=settings.api_prefix)
+    app.include_router(metrics.router, prefix=settings.api_prefix)
+    app.include_router(premium_ai.router, prefix=settings.api_prefix)
 
     @app.get("/")
     async def root():

@@ -6,9 +6,10 @@ Detects scam risk, ghost-likelihood, and staleness signals.
 
 from typing import Dict, List, Optional, Any
 from urllib.parse import urlparse, parse_qs
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import re
 import unicodedata
+import os
 
 from bs4 import BeautifulSoup
 from jobscout.fetchers.http import HttpFetcher
@@ -76,6 +77,30 @@ GENERIC_DESCRIPTIONS = [
     "we are looking for", "join our team", "great opportunity",
     "competitive salary", "excellent benefits", "dynamic environment",
 ]
+
+# Apply-link enrichment controls (cheap; no paid APIs)
+def _int_env(name: str, default: int) -> int:
+    try:
+        v = int(os.getenv(name, str(default)).strip())
+        return v
+    except Exception:
+        return default
+
+
+APPLY_LINK_CACHE_TTL_HOURS = _int_env("JOBSCOUT_APPLY_LINK_CACHE_TTL_HOURS", 24)
+APPLY_LINK_MAX_REDIRECTS = _int_env("JOBSCOUT_APPLY_LINK_MAX_REDIRECTS", 2)
+
+URL_SHORTENER_DOMAINS = {
+    "bit.ly",
+    "tinyurl.com",
+    "t.co",
+    "short.link",
+    "lnkd.in",
+    "buff.ly",
+    "ow.ly",
+    "rebrand.ly",
+    "rb.gy",
+}
 
 
 def extract_emails(text: str) -> List[str]:
@@ -429,39 +454,134 @@ async def _test_apply_link(
     job_url: Optional[str],
     apply_url: Optional[str] = None,
     cache_result: Optional[Dict[str, Any]] = None,
-) -> str:
+) -> Dict[str, Any]:
     """
-    Test if apply link is valid by making HTTP request.
-    Tests apply_url if provided, otherwise job_url.
-    Uses cache if available to avoid repeated checks.
+    Test if apply link is valid by making an HTTP request (bounded).
+
+    - Tests apply_url if provided, otherwise job_url.
+    - Uses DB cache if available and fresh to avoid repeated checks.
+    - Caps redirect chain to keep this cheap.
     
-    Returns: "valid", "broken", or "missing"
+    Returns:
+        {
+            "status": "valid"|"broken"|"missing",
+            "checked_url": Optional[str],
+            "final_url": Optional[str],
+            "redirects": int,
+            "cached": bool,
+            "checked_at": Optional[datetime],
+            "warnings": List[str],
+        }
     """
     # Prefer apply_url over job_url
     url_to_test = apply_url or job_url
     if not url_to_test:
-        return "missing"
-    
-    # Check cache first (if provided)
+        return {
+            "status": "missing",
+            "checked_url": None,
+            "final_url": None,
+            "redirects": 0,
+            "cached": False,
+            "checked_at": None,
+            "warnings": [],
+        }
+
+    warnings: List[str] = []
+    checked_at: Optional[datetime] = None
+
+    # Heuristic warnings (no network)
+    try:
+        d = extract_domain(url_to_test)
+        if d and d in URL_SHORTENER_DOMAINS:
+            warnings.append("Apply link uses a URL shortener (destination is hidden)")
+    except Exception:
+        pass
+
+    # Check cache first (if provided + fresh)
     if cache_result and "apply_link_status" in cache_result:
         cached_status = cache_result.get("apply_link_status")
-        if cached_status in ["valid", "broken", "missing"]:
-            return cached_status
-    
-    # Test the URL with timeout and capped retries
+        created_at = cache_result.get("created_at")
+        if isinstance(created_at, datetime):
+            checked_at = created_at
+            try:
+                if created_at.tzinfo is None:
+                    created_at = created_at.replace(tzinfo=timezone.utc)
+                age_ok = (datetime.now(timezone.utc) - created_at.astimezone(timezone.utc)) <= timedelta(
+                    hours=max(1, APPLY_LINK_CACHE_TTL_HOURS)
+                )
+            except Exception:
+                age_ok = False
+        else:
+            age_ok = False
+
+        if age_ok and cached_status in ["valid", "broken", "missing"]:
+            return {
+                "status": cached_status,
+                "checked_url": url_to_test,
+                "final_url": None,
+                "redirects": 0,
+                "cached": True,
+                "checked_at": checked_at,
+                "warnings": warnings,
+            }
+
+    # Test the URL with timeout and capped retries/redirects
     try:
         async with HttpFetcher(timeout_s=5, max_retries=1) as fetcher:
-            result = await fetcher.fetch(url_to_test, use_cache=False)
-            
+            result = await fetcher.fetch(
+                url_to_test,
+                use_cache=False,
+                allow_redirects=True,
+                max_redirects=max(0, APPLY_LINK_MAX_REDIRECTS),
+                method="GET",
+            )
+
+            final_url = result.final_url
+            redirects = int(result.redirect_count or 0)
+
+            if redirects > 0:
+                warnings.append(f"Apply link redirected {redirects} time(s)")
+
+            # Some ATS systems return 401/403 to unauthenticated clients but are still "alive".
             if result.ok and result.status < 400:
-                return "valid"
-            elif result.status == 404:
-                return "broken"
+                status = "valid"
+            elif result.status in (401, 403):
+                status = "valid"
+                warnings.append(f"Apply link returned {result.status} (may require login)")
+            elif result.status in (404, 410):
+                status = "broken"
             else:
-                return "broken"
+                status = "broken"
+
+            # Destination-domain warning (cheap to show)
+            try:
+                start_domain = extract_domain(url_to_test)
+                final_domain = extract_domain(final_url) if final_url else None
+                if start_domain and final_domain and start_domain != final_domain:
+                    warnings.append(f"Final destination domain differs ({start_domain} → {final_domain})")
+            except Exception:
+                pass
+
+            return {
+                "status": status,
+                "checked_url": url_to_test,
+                "final_url": final_url,
+                "redirects": redirects,
+                "cached": False,
+                "checked_at": datetime.now(timezone.utc),
+                "warnings": warnings[:6],
+            }
     except Exception:
-        # Timeout, connection error, etc.
-        return "broken"
+        warnings.append("Apply link check failed (timeout or network error)")
+        return {
+            "status": "broken",
+            "checked_url": url_to_test,
+            "final_url": None,
+            "redirects": 0,
+            "cached": False,
+            "checked_at": datetime.now(timezone.utc),
+            "warnings": warnings[:6],
+        }
 
 
 async def generate_trust_report(
@@ -537,11 +657,12 @@ async def generate_trust_report(
     )
     
     # Test apply link status (with caching)
-    apply_link_status = await _test_apply_link(
+    apply_link = await _test_apply_link(
         job_url=job_url,
         apply_url=apply_url,
         cache_result=cached_trust_report,
     )
+    apply_link_status = apply_link.get("status") or "missing"
     
     # Calculate overall trust score (0-100, higher = more trustworthy)
     # Invert component scores so higher = better
@@ -573,6 +694,10 @@ async def generate_trust_report(
         "extracted_emails": emails[:5],  # Limit to 5
         "extracted_phones": phones[:3],  # Limit to 3
         "apply_link_status": apply_link_status,
+        "apply_link_final_url": apply_link.get("final_url"),
+        "apply_link_redirects": apply_link.get("redirects", 0),
+        "apply_link_cached": apply_link.get("cached", False),
+        "apply_link_warnings": apply_link.get("warnings", []),
         "domain_consistency_reasons": domain_mismatch_reasons,
         "trust_score": trust_score,  # Overall trust score (0-100, higher = better)
     }

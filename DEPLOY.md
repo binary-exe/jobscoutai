@@ -114,6 +114,15 @@ CREATE TABLE IF NOT EXISTS runs (
 CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);
 ```
 
+**No manual SQL required:** The backend runs `init_schema()` on startup and applies everything below. You only need to run the SQL above (or in `postgres.py` / `apply_schema.sql`) if you want the schema in place before the first deploy. Once the Fly app has started at least once with a valid `JOBSCOUT_DATABASE_URL`, it will create/update:
+
+- **Core:** `jobs`, `runs` (from `postgres.py`)
+- **Apply Workspace:** `apply_schema.sql` → `users`, `resume_versions`, `user_profiles`, `job_targets`, `trust_reports`, `apply_packs`, `applications`, `application_feedback`, `usage_ledger`, `entitlements`
+- **Migrations (in order):** `apply_schema_migration_trust_applications_mvp.sql`, `apply_schema_migration_html.sql`, `apply_schema_migration_profiles.sql`, `apply_schema_migration_pack_topups.sql`, `apply_schema_migration_referrals.sql`, `apply_schema_migration_retention.sql`, `apply_schema_migration_trust_feedback.sql`, `apply_schema_migration_ai_premium.sql`, `apply_schema_migration_contacts.sql`
+- **Optional:** `pgvector_migration_personalization.sql` (best-effort), `analytics_events` table and `analytics_daily_events` view
+
+If something failed on a previous deploy, you can run the same SQL files in that order in the Supabase SQL Editor.
+
 ### 1.2b (Recommended) Enable personalization with pgvector
 If you want **personalized job ranking** and **semantic matching**, run this SQL next:
 
@@ -211,6 +220,8 @@ npm install
 npx vercel --prod
 ```
 
+**If login fails**, see [Vercel CLI login troubleshooting](#vercel-cli-login-troubleshooting) below.
+
 Or connect GitHub:
 1. Go to [vercel.com](https://vercel.com)
 2. **New Project > Import Git Repository**
@@ -225,6 +236,46 @@ In Vercel dashboard > Settings > Environment Variables:
 ```bash
 npx vercel --prod
 ```
+
+**Script (after linking):** From repo root, `powershell -ExecutionPolicy Bypass -File scripts/deploy-frontend.ps1`. See `scripts/README.md`.
+
+**From repo root:** If the Vercel project has **Root Directory** = `frontend`, you can run `npx vercel --prod --yes` from the repo root (where `vercel.json` lives). Ensure you're logged in and, for teams, set `VERCEL_ORG_ID` to your team id if needed.
+
+### Vercel CLI login troubleshooting
+
+If `vercel login` or `npx vercel --prod` fails or keeps asking you to log in:
+
+1. **Run login in a real terminal (interactive)**  
+   In PowerShell or Command Prompt (not through an automated script), run:
+   ```bash
+   cd frontend
+   npx vercel login
+   ```
+   The CLI will show a **one-time code** and open your browser. Complete the sign-in in the browser; the token is saved locally.
+
+2. **Token expired**  
+   Vercel tokens expire after **10 days** of no use. If you see `The specified token is not valid`, run `npx vercel login` again to get a new token.
+
+3. **Use a scope if you have a team**  
+   If you use a team (e.g. "binary-exes-projects"), link the project once so later deploys work without `--scope`:
+   ```bash
+   cd frontend
+   npx vercel link --scope binary-exes-projects
+   ```
+   When prompted, choose the existing Vercel project or create one. Then:
+   ```bash
+   npx vercel --prod
+   ```
+
+4. **Alternative: deploy without CLI**  
+   - Push your code to GitHub and connect the repo in [Vercel Dashboard](https://vercel.com) → **Add New Project**. Set **Root Directory** to `frontend`.  
+   - Every push to `main` will auto-deploy. No `vercel login` needed.
+
+5. **CI/CD: use a token from the dashboard**  
+   For scripts or CI, create a token at [vercel.com/account/tokens](https://vercel.com/account/tokens) and run:
+   ```bash
+   vercel --prod --token YOUR_TOKEN
+   ```
 
 ---
 
@@ -289,6 +340,67 @@ Since Fly.io keeps machines running, scheduled scrapes work automatically withou
 - Verify `JOBSCOUT_OPENAI_API_KEY` is set
 - Check `JOBSCOUT_AI_ENABLED=true`
 - Monitor OpenAI usage at platform.openai.com
+
+---
+
+---
+
+## Post-upgrade deploy checklist (Apply Workspace, Extension, Premium AI)
+
+After implementing the upgrade plan (Trust v2, Tracker, Extension, Premium AI), use this checklist to deploy and verify.
+
+### 1. Backend (Fly.io)
+
+```bash
+# From repo root
+fly deploy -a jobscout-api
+```
+
+- **Migrations**: Backend runs `init_schema()` on startup; it applies `apply_schema_migration_contacts.sql`, `apply_schema_migration_trust_feedback.sql`, and creates `analytics_events` + `analytics_daily_events` if missing. No manual SQL needed for existing Supabase projects (migrations are additive and idempotent).
+- **Secrets to set** (if not already):
+  ```bash
+  fly secrets set JOBSCOUT_DATABASE_URL="postgresql://..." -a jobscout-api
+  fly secrets set JOBSCOUT_CORS_ORIGINS='["https://jobscoutai.vercel.app","http://localhost:3000"]' -a jobscout-api
+  fly secrets set JOBSCOUT_SUPABASE_URL="https://YOUR_PROJECT.supabase.co" -a jobscout-api
+  fly secrets set JOBSCOUT_SUPABASE_ANON_KEY="..." -a jobscout-api
+  fly secrets set JOBSCOUT_ADMIN_TOKEN="..." -a jobscout-api
+  ```
+- **Premium AI** (Interview Coach + Templates): Set to enable quota-gated features.
+  ```bash
+  fly secrets set JOBSCOUT_PREMIUM_AI_ENABLED="true" -a jobscout-api
+  fly secrets set JOBSCOUT_OPENAI_API_KEY="sk-..." -a jobscout-api
+  ```
+- **CORS**: Chrome/Edge extension origins are allowed automatically via regex (`chrome-extension://*`). No need to add extension IDs to `JOBSCOUT_CORS_ORIGINS`.
+
+**Verify**: `curl -s https://jobscout-api.fly.dev/api/v1/jobs?page_size=1` returns JSON. Or run `scripts/smoke_api.sh` / `scripts/smoke_api.py` with `API_BASE=https://jobscout-api.fly.dev/api/v1` (see `scripts/README.md`).
+
+### 2. Frontend (Vercel)
+
+- **Option A – Git**: Push to `main`; Vercel auto-deploys if connected.
+- **Option B – CLI**:
+  ```bash
+  cd frontend
+  npx vercel --prod
+  ```
+- **Env**: In Vercel dashboard, set `NEXT_PUBLIC_API_URL=https://jobscout-api.fly.dev/api/v1` (and `NEXT_PUBLIC_SUPABASE_*`, `NEXT_PUBLIC_POSTHOG_*` if used).
+
+**Verify**: Open the app URL, go to Apply Workspace, parse a job, generate Trust Report and Apply Pack.
+
+### 3. Extension (Chrome/Edge)
+
+- **Load unpacked**: Chrome → Extensions → Developer mode → Load unpacked → select the `extension/` folder.
+- **Connect**: Open JobScoutAI in a tab, log in, then in the extension popup click **Connect**.
+- **Save job**: On a job detail page (e.g. LinkedIn/Indeed), click **Save job** in the extension, then **Open Apply Workspace →** to deep-link and generate Trust Report.
+
+See `extension/README.md` for full steps.
+
+### 4. Config summary
+
+| Item | Where | Notes |
+|------|--------|--------|
+| Premium AI | Fly secrets | `JOBSCOUT_PREMIUM_AI_ENABLED=true`, `JOBSCOUT_OPENAI_API_KEY` |
+| CORS | Fly secrets | `JOBSCOUT_CORS_ORIGINS`; extension allowed by regex |
+| Apply schema | Auto on startup | Backend runs migrations in `postgres.py` |
 
 ---
 

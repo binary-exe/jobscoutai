@@ -1,14 +1,15 @@
 """
-Working Nomads RSS provider.
+Working Nomads provider (low-bot-risk JSON endpoint).
 
-RSS feed: https://www.workingnomads.com/jobs.rss
+Working Nomads does not reliably serve an RSS feed anymore. They expose a small
+public JSON feed we can consume without aggressive scraping:
+
+- https://www.workingnomads.com/api/exposed_jobs/
 """
 
 from __future__ import annotations
 
 from typing import List, TYPE_CHECKING
-
-from bs4 import BeautifulSoup
 
 from jobscout.models import (
     NormalizedJob,
@@ -28,7 +29,7 @@ if TYPE_CHECKING:
 
 
 class WorkingNomadsProvider(Provider):
-    """Provider for Working Nomads RSS feed."""
+    """Provider for Working Nomads public JSON feed."""
 
     name = "workingnomads"
 
@@ -37,71 +38,54 @@ class WorkingNomadsProvider(Provider):
         fetcher: "HttpFetcher",
         criteria: Criteria,
     ) -> List[NormalizedJob]:
-        """Collect jobs from Working Nomads RSS."""
+        """Collect jobs from Working Nomads JSON feed."""
         self.reset_stats()
 
-        url = "https://www.workingnomads.com/jobs.rss"
+        url = "https://www.workingnomads.com/api/exposed_jobs/"
 
-        result = await fetcher.fetch(url)
-        if not result.ok:
-            self.log_error(f"RSS request failed: {result.error or result.status}")
+        result = await fetcher.fetch_json(url)
+        if not result.ok or not result.json_data:
+            self.log_error(f"API request failed: {result.error or result.status}")
+            return []
+
+        data = result.json_data
+        if not isinstance(data, list):
+            self.log_error("Unexpected response format")
             return []
 
         jobs: List[NormalizedJob] = []
 
-        try:
-            soup = BeautifulSoup(result.text, "xml")
-            items = soup.find_all("item")
-        except Exception as e:
-            self.log_error(f"XML parsing failed: {e}")
-            return []
-
-        for item in items[:criteria.max_results_per_source]:
+        for j in data[:criteria.max_results_per_source]:
+            if not isinstance(j, dict):
+                continue
             try:
-                title_tag = item.find("title")
-                link_tag = item.find("link")
-                raw_title = normalize_text(title_tag.get_text() if title_tag else "")
-                link = canonicalize_url(link_tag.get_text() if link_tag else "")
-
-                if not raw_title or not link:
+                title = normalize_text(j.get("title", ""))
+                company = normalize_text(j.get("company_name", "")) or "Unknown"
+                if not title:
                     continue
 
-                # Description
-                desc_tag = item.find("description")
-                desc_html = desc_tag.get_text() if desc_tag else ""
-                description = strip_html(desc_html)
+                job_url = canonicalize_url(j.get("url", ""))
+                if not job_url:
+                    continue
 
-                # Category
-                category_tag = item.find("category")
-                category = normalize_text(category_tag.get_text() if category_tag else "")
+                description = strip_html(j.get("description", ""))
+                location = normalize_text(j.get("location", "")) or "Remote"
+                posted_at = parse_date(normalize_text(j.get("pub_date", "")))
 
-                # Posted date
-                pub_tag = item.find("pubDate")
-                pub_date = normalize_text(pub_tag.get_text() if pub_tag else "")
-                posted_at = parse_date(pub_date)
+                tags_raw = j.get("tags", []) or []
+                tags = [normalize_text(str(t)) for t in tags_raw[:10] if t]
 
-                # Extract company from title (format: "Company - Job Title")
-                company = "Unknown"
-                title = raw_title
-                if " - " in raw_title:
-                    parts = raw_title.split(" - ", 1)
-                    company = normalize_text(parts[0])
-                    title = normalize_text(parts[1])
-
-                # Employment type from category
+                # Employment type is not explicit; best-effort from tags/category
                 employment_types = [EmploymentType.UNKNOWN]
-                if category:
-                    et = EmploymentType.from_text(category)
+                cat = normalize_text(j.get("category_name", ""))
+                if cat:
+                    et = EmploymentType.from_text(cat)
                     if et != EmploymentType.UNKNOWN:
                         employment_types = [et]
 
-                # Working Nomads is remote-only
-                remote_type = RemoteType.REMOTE
-                location = "Remote"
-
-                tags = [category] if category else []
-
                 job = NormalizedJob(
+                    # Stable ID for dedupe across runs
+                    provider_id=job_url,
                     scraped_at=now_utc(),
                     posted_at=posted_at,
                     source=self.name,
@@ -109,17 +93,18 @@ class WorkingNomadsProvider(Provider):
                     title=title,
                     company=company,
                     location_raw=location,
-                    remote_type=remote_type,
+                    remote_type=RemoteType.REMOTE,
                     employment_types=employment_types,
-                    job_url=link,
-                    apply_url=link,
+                    job_url=job_url,
+                    apply_url=job_url,
                     description_text=description,
                     tags=tags,
+                    raw_data=j,
                 )
                 jobs.append(job)
 
             except Exception as e:
-                self.log_error(f"Error parsing item: {e}")
+                self.log_error(f"Error parsing job: {e}")
                 continue
 
         self.stats.collected = len(jobs)

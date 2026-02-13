@@ -4,6 +4,66 @@ This document provides comprehensive context for AI agents (like Codex CLI) to c
 
 **⚠️ CRITICAL: Read this entire document before making any changes. This file is re-read every session.**
 
+---
+
+## Auto‑Agent Proof Operating Manual (read this first)
+
+This section is optimized for “auto agents” that may otherwise miss repo-specific footguns. Treat it as **non-negotiable**.
+
+### Non‑negotiables
+
+- **Backwards compatibility**
+  - Do not remove/rename existing API endpoints.
+  - Do not drop/rename existing DB columns.
+  - Prefer additive changes: new nullable columns, new tables, new indexes.
+- **No secrets**
+  - Never commit API keys, tokens, `.env` files, or credentials.
+  - If you add a new env var, update the relevant `env.sample` file.
+- **No platform changes**
+  - Do not change deployment platforms (Fly/Vercel/Supabase) without an explicit request.
+- **Cost guardrails by default**
+  - Public scrape must remain guarded and must not silently enable AI.
+  - Expensive authenticated endpoints must remain rate-limited / quota-gated.
+
+### Golden paths (use existing patterns)
+
+- **Public job browsing/search**: `frontend/lib/api.ts` ↔ `backend/app/api/jobs.py`
+- **Public scrape trigger** (guarded): `backend/app/api/scrape.py` (in-memory caps + per-IP rate limit + forces `use_ai=False`)
+- **Admin scrape trigger**: `backend/app/api/admin.py` (`Authorization: Bearer JOBSCOUT_ADMIN_TOKEN`)
+- **Apply Workspace (auth required)**:
+  - frontend calls: `frontend/lib/apply-api.ts` (always attaches Supabase bearer token)
+  - backend auth: `backend/app/core/auth.py` (validates by calling Supabase `/auth/v1/user`)
+  - backend rate limits: `backend/app/core/rate_limit.py`
+- **DB + migrations**: `backend/app/storage/postgres.py:init_schema()` runs on startup (best-effort; must be idempotent)
+
+### Mandatory verification gates (“if you changed X, you must do Y”)
+
+- **Touched `frontend/`**
+  - Run: `cd frontend && npm run lint`
+  - Run: `cd frontend && npm run build`
+- **Touched Python (`backend/` or `jobscout/`)**
+  - Run: `python -m compileall backend jobscout`
+  - If endpoints changed: smoke test in `/docs`
+- **Added/changed env vars**
+  - Update: `backend/env.sample` and/or `frontend/env.sample`
+  - Ensure build/SSR safe defaults (no crashes if optional env vars are missing)
+- **Added/changed DB schema**
+  - Ensure additive + idempotent SQL
+  - Ensure `init_schema()` executes it (or it’s explicitly optional and best-effort)
+
+### “Do not weaken these” checklist
+
+- Public scrape endpoint guardrails (concurrency + rate limit + AI forced off)
+- CORS behavior (web origins + `chrome-extension://` regex + exception handlers that preserve CORS headers)
+- Auth model (backend validates session via Supabase `/auth/v1/user`; no local JWT verification deps)
+
+### Skills + Subagents (how to stay consistent)
+
+- **Skills** (procedural playbooks) live in `.cursor/skills/`:
+  - `jobscoutai-dev`, `pr-check`, `deploy`, `frontend`, `backend`, `authentication`, `ui-ux`, `qa`
+- **Custom subagents** (independent verifiers) live in `.cursor/agents/`:
+  - run them for independent review/verification before declaring “done”
+
 ## 📋 Table of Contents
 
 1. [Quick Start & Commands](#quick-start--commands) ⚡ **START HERE**
@@ -449,6 +509,8 @@ jobscout/
   - Enrichment
   - AI pipeline (optional)
   - Storage
+- **Built-in providers** (registry in `run_scrape()`): `remotive`, `remoteok`, `arbeitnow`, `weworkremotely`, `workingnomads`, `remoteco`, `justremote`, `wellfound`, `stackoverflow`, `indeed`, `flexjobs`. Discovery can add Lever, Greenhouse, Ashby, Recruitee, SchemaOrg. Use `JOBSCOUT_ENABLED_PROVIDERS` (comma-separated) to allowlist which sources run (e.g. `remotive,remoteok,arbeitnow,weworkremotely` for stable/low-risk only).
+- **Bounded collection**: `Criteria.max_results_per_source` and `Criteria.max_search_results` cap jobs per source and total; discovery uses `max_discovered_ats_tokens` to keep ATS expansion bounded.
 
 #### `jobscout/providers/base.py`
 - `Provider` abstract base class
@@ -934,7 +996,12 @@ curl -X POST https://jobscout-api.fly.dev/api/v1/scrape \
 
 # Local CLI scrape
 python -m jobscout "engineer" --verbose
+
+# Smoke test API (public endpoints)
+API_BASE=https://jobscout-api.fly.dev/api/v1 python scripts/smoke_api.py
 ```
+
+- **Smoke test (manual)**: See `docs/SMOKE_TEST.md`. **Metrics (SQL)**: Run `scripts/metrics_query.sql` in Supabase for activation/trust/tracker rollups.
 
 ---
 
@@ -947,5 +1014,5 @@ python -m jobscout "engineer" --verbose
 
 ---
 
-**Last Updated**: 2026-01-09
+**Last Updated**: 2026-02-13
 **Version**: 1.0.0

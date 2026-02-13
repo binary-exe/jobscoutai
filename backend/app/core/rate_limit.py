@@ -63,6 +63,11 @@ class RateLimiter:
 # Apply pack generation: 10 requests per minute per user
 apply_pack_limiter = RateLimiter(requests_per_window=10, window_seconds=60)
 
+# Job capture/import (extension, 1-click saves): 30 per hour per user
+# Note: this is in-memory and per-instance. It's still useful as a strict guardrail
+# in single-instance setups; for multi-instance, swap to a shared store (e.g. Redis).
+job_capture_limiter = RateLimiter(requests_per_window=30, window_seconds=60 * 60)
+
 
 def check_rate_limit(user_id: UUID, limiter: RateLimiter = apply_pack_limiter) -> None:
     """

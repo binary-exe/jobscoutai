@@ -1,13 +1,17 @@
 -- Apply Workspace V1 Database Schema
 -- Run this in Supabase SQL Editor or via migration
 
+-- Extensions (needed for gen_random_uuid())
+CREATE EXTENSION IF NOT EXISTS pgcrypto;
+
 -- Users table (if not exists)
 CREATE TABLE IF NOT EXISTS users (
     user_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     email TEXT UNIQUE,
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    plan TEXT DEFAULT 'free' CHECK (plan IN ('free', 'paid')),
+    -- NOTE: allow flexible plan strings (free/pro/pro_plus/annual/paid/...)
+    plan TEXT DEFAULT 'free',
     subscription_id TEXT, -- Paddle subscription ID
     paddle_customer_id TEXT, -- Paddle customer ID
     subscription_status TEXT, -- active, cancelled, past_due, etc.
@@ -17,7 +21,25 @@ CREATE TABLE IF NOT EXISTS users (
 CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
 CREATE INDEX IF NOT EXISTS idx_users_subscription_id ON users(subscription_id);
 
+-- Resume versions
+CREATE TABLE IF NOT EXISTS resume_versions (
+    resume_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
+    resume_text TEXT NOT NULL,
+    resume_hash TEXT NOT NULL, -- SHA256 hash for caching
+    proof_points TEXT, -- JSON array of quantified achievements
+    extracted_skills JSONB, -- Structured skills extraction
+    extracted_seniority TEXT,
+    extracted_bullets JSONB, -- Evidence bullets
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX IF NOT EXISTS idx_resume_versions_user_id ON resume_versions(user_id);
+CREATE INDEX IF NOT EXISTS idx_resume_versions_hash ON resume_versions(resume_hash);
+
 -- User profiles (1:1 with users)
+-- NOTE: Must come after resume_versions because it references resume_versions(resume_id)
 CREATE TABLE IF NOT EXISTS user_profiles (
     user_id UUID PRIMARY KEY REFERENCES users(user_id) ON DELETE CASCADE,
 
@@ -44,23 +66,6 @@ CREATE TABLE IF NOT EXISTS user_profiles (
 
 CREATE INDEX IF NOT EXISTS idx_user_profiles_updated_at ON user_profiles(updated_at DESC);
 CREATE INDEX IF NOT EXISTS idx_user_profiles_primary_resume_id ON user_profiles(primary_resume_id);
-
--- Resume versions
-CREATE TABLE IF NOT EXISTS resume_versions (
-    resume_id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    user_id UUID NOT NULL REFERENCES users(user_id) ON DELETE CASCADE,
-    resume_text TEXT NOT NULL,
-    resume_hash TEXT NOT NULL, -- SHA256 hash for caching
-    proof_points TEXT, -- JSON array of quantified achievements
-    extracted_skills JSONB, -- Structured skills extraction
-    extracted_seniority TEXT,
-    extracted_bullets JSONB, -- Evidence bullets
-    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-);
-
-CREATE INDEX IF NOT EXISTS idx_resume_versions_user_id ON resume_versions(user_id);
-CREATE INDEX IF NOT EXISTS idx_resume_versions_hash ON resume_versions(resume_hash);
 
 -- Job targets (parsed job descriptions)
 CREATE TABLE IF NOT EXISTS job_targets (

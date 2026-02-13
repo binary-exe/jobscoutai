@@ -27,6 +27,10 @@ class FetchResult:
     error: str = ""
     from_cache: bool = False
     elapsed_ms: float = 0
+    # When redirects are followed, this is the final response URL.
+    final_url: Optional[str] = None
+    # Number of redirects followed (0 if none).
+    redirect_count: int = 0
 
     @property
     def ok(self) -> bool:
@@ -212,6 +216,9 @@ class HttpFetcher:
         url: str,
         use_cache: bool = True,
         headers: Optional[Dict[str, str]] = None,
+        allow_redirects: bool = True,
+        max_redirects: int = 10,
+        method: str = "GET",
     ) -> FetchResult:
         """
         Fetch a URL with retries and backoff.
@@ -233,8 +240,17 @@ class HttpFetcher:
             await self.throttler.acquire(url)
             try:
                 timeout = aiohttp.ClientTimeout(total=self.timeout_s)
-                async with self._session.get(url, timeout=timeout, headers=headers, allow_redirects=True) as resp:
+                async with self._session.request(
+                    method,
+                    url,
+                    timeout=timeout,
+                    headers=headers,
+                    allow_redirects=allow_redirects,
+                    max_redirects=max_redirects,
+                ) as resp:
                     last_status = resp.status
+                    final_url = str(resp.url) if getattr(resp, "url", None) is not None else None
+                    redirect_count = len(getattr(resp, "history", []) or [])
 
                     # Handle rate limiting
                     if resp.status == 429:
@@ -258,6 +274,8 @@ class HttpFetcher:
                             status=resp.status,
                             error=f"HTTP {resp.status}",
                             elapsed_ms=(time.time() - start_time) * 1000,
+                            final_url=final_url,
+                            redirect_count=redirect_count,
                         )
 
                     # Check content type
@@ -271,6 +289,8 @@ class HttpFetcher:
                             content_type=content_type,
                             error="Binary content skipped",
                             elapsed_ms=(time.time() - start_time) * 1000,
+                            final_url=final_url,
+                            redirect_count=redirect_count,
                         )
 
                     # Read response
@@ -294,6 +314,8 @@ class HttpFetcher:
                         json_data=json_data,
                         content_type=content_type,
                         elapsed_ms=(time.time() - start_time) * 1000,
+                        final_url=final_url,
+                        redirect_count=redirect_count,
                     )
 
                     # Cache successful responses

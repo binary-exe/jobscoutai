@@ -141,7 +141,9 @@ async def trigger_scrape_run(
         location=location,
         remote_only=True,
         max_results_per_source=max_results_per_source,
-        enrich_company_pages=True,
+        # Cost control: default off (can be enabled via settings for trusted/admin runs).
+        enrich_company_pages=bool(getattr(settings, "scrape_enrich_company_pages", False)),
+        max_enrichment_pages=int(getattr(settings, "scrape_max_enrichment_pages", 2)),
         concurrency=concurrency,
     )
 

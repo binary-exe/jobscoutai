@@ -1,0 +1,20 @@
+{
+  "manifest_version": 3,
+  "name": "JobScoutAI Saver",
+  "version": "0.1.0",
+  "description": "1-click save job postings to JobScoutAI Apply Workspace (no server crawling).",
+  "permissions": ["storage", "activeTab", "scripting"],
+  "host_permissions": [
+    "https://jobscout-api.fly.dev/*",
+    "http://localhost:8000/*",
+    "https://jobscoutai.vercel.app/*",
+    "http://localhost:3000/*"
+  ],
+  "action": {
+    "default_title": "Save job to JobScoutAI",
+    "default_popup": "popup/popup.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  }
+}

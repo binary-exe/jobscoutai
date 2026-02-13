@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field, HttpUrl
 
 from backend.app.core.database import db
 from backend.app.core.auth import get_current_user, AuthUser
-from backend.app.core.rate_limit import check_rate_limit, apply_pack_limiter
+from backend.app.core.rate_limit import check_rate_limit, apply_pack_limiter, job_capture_limiter
 from backend.app.storage import apply_storage
 from backend.app.services import job_parser
 from backend.app.services import trust_analyzer
@@ -68,8 +68,145 @@ class TrustReportResponse(BaseModel):
     scam_score: Optional[int] = None
     ghost_score: Optional[int] = None
     apply_link_status: Optional[str] = None
+    apply_link_final_url: Optional[str] = None
+    apply_link_redirects: Optional[int] = None
+    apply_link_cached: Optional[bool] = None
+    apply_link_warnings: Optional[list[str]] = None
     domain_consistency_reasons: Optional[list[str]] = None
     trust_score: Optional[int] = None
+    verified_at: Optional[datetime] = None
+    confidence: Optional[dict] = None
+    community: Optional[dict[str, int]] = None
+    community_reasons: Optional[list[str]] = None
+    next_steps: Optional[list[str]] = None
+
+
+def _confidence_from_reasons(reasons: Optional[list[str]]) -> int:
+    """
+    Cheap confidence proxy: more independent signals => higher confidence.
+    Returns 0..100.
+    """
+    if not reasons:
+        return 25
+    # Down-weight generic "no obvious ..." sentences
+    meaningful = [
+        r for r in reasons
+        if r and "no obvious" not in r.lower() and "no posting date" not in r.lower()
+    ]
+    n = len(meaningful)
+    if n >= 5:
+        return 90
+    if n >= 3:
+        return 75
+    if n >= 1:
+        return 55
+    return 35
+
+
+def _build_confidence(report: dict) -> dict:
+    return {
+        "scam": _confidence_from_reasons(report.get("scam_reasons")),
+        "ghost": _confidence_from_reasons(report.get("ghost_reasons")),
+        "staleness": _confidence_from_reasons(report.get("staleness_reasons")),
+        "domain": _confidence_from_reasons(report.get("domain_consistency_reasons")),
+        "overall": int(
+            (
+                _confidence_from_reasons(report.get("scam_reasons"))
+                + _confidence_from_reasons(report.get("ghost_reasons"))
+                + _confidence_from_reasons(report.get("staleness_reasons"))
+                + _confidence_from_reasons(report.get("domain_consistency_reasons"))
+            )
+            / 4
+        ),
+    }
+
+
+def _community_penalty(community: dict[str, int]) -> tuple[int, list[str]]:
+    """
+    Convert community feedback into a score penalty (0..25) + reasons for UI.
+    """
+    reports_total = int(community.get("reports_total", 0) or 0)
+    inaccurate = int(community.get("inaccurate_total", 0) or 0)
+    accurate = int(community.get("accurate_total", 0) or 0)
+
+    penalty = min(25, reports_total * 4 + inaccurate * 6)
+    reasons: list[str] = []
+
+    if reports_total > 0:
+        reasons.append(f"Community reports: {reports_total}")
+    if inaccurate > 0:
+        reasons.append(f"Marked inaccurate: {inaccurate}")
+    if accurate > 0:
+        reasons.append(f"Marked accurate: {accurate}")
+
+    return penalty, reasons
+
+
+def _link_warnings_from_url(url: Optional[str]) -> list[str]:
+    """Cheap link warnings (no network) for cached reports."""
+    if not url:
+        return []
+    try:
+        d = trust_analyzer.extract_domain(url)
+        if d and hasattr(trust_analyzer, "URL_SHORTENER_DOMAINS") and d in trust_analyzer.URL_SHORTENER_DOMAINS:
+            return ["Apply link uses a URL shortener (destination is hidden)"]
+    except Exception:
+        return []
+    return []
+
+
+def _build_next_steps(report: dict) -> list[str]:
+    """
+    Turn trust signals into an actionable checklist.
+
+    This intentionally stays heuristic and low-cost: no extra network calls.
+    """
+    steps: list[str] = []
+
+    scam_risk = (report.get("scam_risk") or "").lower()
+    ghost = (report.get("ghost_likelihood") or "").lower()
+    staleness_score = report.get("staleness_score")
+    apply_link_status = (report.get("apply_link_status") or "").lower()
+    trust_score = report.get("trust_score")
+    domain_warnings = report.get("domain_consistency_reasons") or []
+    link_warnings = report.get("apply_link_warnings") or []
+
+    if scam_risk == "high" or (isinstance(trust_score, int) and trust_score <= 40):
+        steps.append("Avoid applying through this link; verify the company and role on the official careers page.")
+        steps.append("Do not share sensitive info (passport, bank details) until legitimacy is confirmed.")
+
+    if apply_link_status == "broken":
+        steps.append("Apply link looks broken — search the company’s careers site or ATS directly for a live listing.")
+    elif apply_link_status == "missing":
+        steps.append("No apply link found — search the company’s careers page or the original posting source.")
+
+    if domain_warnings:
+        steps.append("Double-check that the company website domain and apply-link domain match before proceeding.")
+
+    if link_warnings:
+        steps.append("Be cautious with redirects/shortened links; confirm the final destination is an official ATS/company domain.")
+
+    if isinstance(staleness_score, int) and staleness_score >= 50:
+        steps.append("Posting may be stale — prioritize newer listings or reach out via referral before investing time.")
+
+    if ghost == "high":
+        steps.append("Ghost-job signals are high — prioritize roles with recent activity or a direct recruiter contact.")
+
+    # Positive action when signals are OK
+    if not steps and (scam_risk in ("low", "medium")):
+        steps.append("Looks reasonably safe — proceed to apply, then click “Start Tracking” to manage follow-ups.")
+
+    # Always end with a lightweight reminder
+    steps.append("If you applied, set a reminder date and track outcomes to improve your targeting over time.")
+
+    # Deduplicate while preserving order
+    seen = set()
+    deduped: list[str] = []
+    for s in steps:
+        if s not in seen:
+            seen.add(s)
+            deduped.append(s)
+    return deduped[:7]
 
 
 class ApplyPackResponse(BaseModel):
@@ -105,17 +242,31 @@ class CreateApplicationRequest(BaseModel):
     status: str = "applied"
     notes: Optional[str] = None
     reminder_at: Optional[datetime] = None
+    contact_email: Optional[str] = None
+    contact_linkedin_url: Optional[str] = None
+    contact_phone: Optional[str] = None
 
 
 class UpdateApplicationRequest(BaseModel):
     status: Optional[str] = None
     notes: Optional[str] = None
     reminder_at: Optional[datetime] = None
+    contact_email: Optional[str] = None
+    contact_linkedin_url: Optional[str] = None
+    contact_phone: Optional[str] = None
 
 
 class JobScoutImportRequest(BaseModel):
     """Import job from JobScout directly (no URL parsing needed)."""
     job_id: Optional[str] = None  # JobScout job_id for auditing
+    source: Optional[str] = Field(
+        default="jobscout",
+        description="Origin of import payload (e.g. jobscout|extension|manual)",
+    )
+    captured_from: Optional[str] = Field(
+        default=None,
+        description="Optional capture site identifier (e.g. linkedin|indeed|greenhouse|lever|ats)",
+    )
     job_url: Optional[str] = None
     apply_url: Optional[str] = None
     title: str
@@ -135,6 +286,15 @@ class JobScoutImportRequest(BaseModel):
     ai_summary: Optional[str] = None
     ai_requirements: Optional[str] = None
     ai_tech_stack: Optional[str] = None
+
+
+# ==================== Trust Report Feedback (Community) ====================
+
+class TrustFeedbackRequest(BaseModel):
+    feedback_kind: str = Field(..., description="report|accuracy")
+    dimension: str = Field("overall", description="overall|scam|ghost|staleness|link")
+    value: Optional[str] = None
+    comment: Optional[str] = None
 
 
 # ==================== Helper: Require Authenticated User ====================
@@ -307,6 +467,54 @@ async def parse_job(
         }
 
 
+@router.get("/job/target/{job_target_id}")
+async def get_job_target(
+    job_target_id: UUID,
+    user_id: UUID = Depends(require_auth_user),
+):
+    """
+    Get a job target by ID (for deep-linking from extension or Apply page).
+    Returns a ParsedJob-like payload so the Apply page can load it without re-parsing.
+    """
+    async with db.connection() as conn:
+        job_target = await apply_storage.get_job_target(conn, user_id=user_id, job_target_id=job_target_id)
+    if not job_target:
+        raise HTTPException(status_code=404, detail="Job target not found")
+    extracted_json = job_target.get("extracted_json")
+    if isinstance(extracted_json, str):
+        try:
+            extracted_json = json.loads(extracted_json)
+        except Exception:
+            extracted_json = {}
+    elif extracted_json is None:
+        extracted_json = {}
+    apply_url = None
+    if isinstance(extracted_json, dict):
+        apply_url = extracted_json.get("apply_url")
+    apply_url = apply_url or job_target.get("apply_url") or job_target.get("job_url")
+    employment_type = job_target.get("employment_type")
+    if isinstance(employment_type, str) and employment_type:
+        employment_type = [s.strip() for s in employment_type.split(",") if s.strip()]
+    elif not employment_type:
+        employment_type = []
+    return {
+        "job_target_id": str(job_target["job_target_id"]),
+        "title": job_target.get("title"),
+        "company": job_target.get("company"),
+        "location": job_target.get("location"),
+        "remote_type": job_target.get("remote_type"),
+        "employment_type": employment_type,
+        "salary_min": job_target.get("salary_min"),
+        "salary_max": job_target.get("salary_max"),
+        "salary_currency": job_target.get("salary_currency"),
+        "description_text": job_target.get("description_text"),
+        "job_url": job_target.get("job_url"),
+        "apply_url": apply_url,
+        "extracted": True,
+        "extraction_method": "job_target",
+    }
+
+
 @router.post("/job/import")
 async def import_job_from_jobscout(
     request: JobScoutImportRequest,
@@ -317,6 +525,11 @@ async def import_job_from_jobscout(
     Creates a job_target without re-scraping the URL.
     Stores JobScout-specific fields in extracted_json.
     """
+    # Extension-originated saves should be strictly rate-limited (client-side + server-side).
+    # This is a low-cost guardrail; multi-instance deployments should replace with shared limiter.
+    if (request.source or "").lower() == "extension":
+        check_rate_limit(user_id, job_capture_limiter)
+
     async with db.connection() as conn:
         # Ensure user exists
         user = await apply_storage.get_user(conn, user_id)
@@ -332,8 +545,9 @@ async def import_job_from_jobscout(
         
         # Build extracted_json with JobScout-specific fields
         extracted_json = {
-            "source": "jobscout",
+            "source": (request.source or "jobscout").lower(),
             "job_id": request.job_id,
+            "captured_from": (request.captured_from.lower() if request.captured_from else None),
             "apply_url": request.apply_url or request.job_url,
             "company_website": request.company_website,
             "linkedin_url": request.linkedin_url,
@@ -571,19 +785,54 @@ async def generate_trust_report(
         # Check cache (unless forced)
         existing = await apply_storage.get_trust_report(conn, job_target_id)
         if existing and not force:
+            # For cached reports, include cheap link warnings (no network)
+            extracted_json = job_target.get("extracted_json")
+            if isinstance(extracted_json, str):
+                try:
+                    extracted_json = json.loads(extracted_json)
+                except Exception:
+                    extracted_json = {}
+            elif extracted_json is None:
+                extracted_json = {}
+            if not isinstance(extracted_json, dict):
+                extracted_json = {}
+
+            apply_url = (
+                extracted_json.get("apply_url")
+                or job_target.get("apply_url")
+                or job_target.get("job_url")
+            )
+            link_warnings = _link_warnings_from_url(apply_url)
+
+            community = await apply_storage.get_trust_report_feedback_summary(conn, job_target_id)
+            penalty, community_reasons = _community_penalty(community)
+            trust_score = existing.get("trust_score")
+            trust_score_adj = max(0, int(trust_score) - penalty) if trust_score is not None else None
+            payload = {
+                "trust_report_id": str(existing["trust_report_id"]),
+                "scam_risk": existing["scam_risk"],
+                "scam_reasons": existing.get("scam_reasons", []) or [],
+                "ghost_likelihood": existing["ghost_likelihood"],
+                "ghost_reasons": existing.get("ghost_reasons", []) or [],
+                "staleness_score": existing.get("staleness_score"),
+                "staleness_reasons": existing.get("staleness_reasons"),
+                "scam_score": existing.get("scam_score"),
+                "ghost_score": existing.get("ghost_score"),
+                "apply_link_status": existing.get("apply_link_status"),
+                "apply_link_final_url": None,
+                "apply_link_redirects": None,
+                "apply_link_cached": True,
+                "apply_link_warnings": link_warnings,
+                "domain_consistency_reasons": existing.get("domain_consistency_reasons"),
+                "trust_score": trust_score_adj,
+            }
             return TrustReportResponse(
-                trust_report_id=str(existing["trust_report_id"]),
-                scam_risk=existing["scam_risk"],
-                scam_reasons=existing.get("scam_reasons", []) or [],
-                ghost_likelihood=existing["ghost_likelihood"],
-                ghost_reasons=existing.get("ghost_reasons", []) or [],
-                staleness_score=existing.get("staleness_score"),
-                staleness_reasons=existing.get("staleness_reasons"),
-                scam_score=existing.get("scam_score"),
-                ghost_score=existing.get("ghost_score"),
-                apply_link_status=existing.get("apply_link_status"),
-                domain_consistency_reasons=existing.get("domain_consistency_reasons"),
-                trust_score=existing.get("trust_score"),
+                **payload,
+                verified_at=existing.get("created_at"),
+                confidence=_build_confidence(payload),
+                community=community,
+                community_reasons=community_reasons,
+                next_steps=_build_next_steps(payload),
             )
         
         # Parse dates
@@ -648,21 +897,93 @@ async def generate_trust_report(
             domain_consistency_reasons=report_data.get("domain_consistency_reasons", []),
             trust_score=report_data.get("trust_score"),
         )
-        
+
+        community = await apply_storage.get_trust_report_feedback_summary(conn, job_target_id)
+        penalty, community_reasons = _community_penalty(community)
+        raw_score = trust_report.get("trust_score") or report_data.get("trust_score")
+        trust_score_adj = max(0, int(raw_score) - penalty) if raw_score is not None else None
+
+        payload = {
+            "trust_report_id": str(trust_report["trust_report_id"]),
+            "scam_risk": trust_report["scam_risk"],
+            "scam_reasons": trust_report.get("scam_reasons", []) or [],
+            "ghost_likelihood": trust_report["ghost_likelihood"],
+            "ghost_reasons": trust_report.get("ghost_reasons", []) or [],
+            "staleness_score": trust_report.get("staleness_score"),
+            "staleness_reasons": trust_report.get("staleness_reasons"),
+            "scam_score": trust_report.get("scam_score") or report_data.get("scam_score"),
+            "ghost_score": trust_report.get("ghost_score") or report_data.get("ghost_score"),
+            "apply_link_status": trust_report.get("apply_link_status") or report_data.get("apply_link_status"),
+            "apply_link_final_url": report_data.get("apply_link_final_url"),
+            "apply_link_redirects": report_data.get("apply_link_redirects"),
+            "apply_link_cached": report_data.get("apply_link_cached", False),
+            "apply_link_warnings": report_data.get("apply_link_warnings") or _link_warnings_from_url(apply_url),
+            "domain_consistency_reasons": trust_report.get("domain_consistency_reasons") or report_data.get("domain_consistency_reasons"),
+            "trust_score": trust_score_adj,
+        }
+
         return TrustReportResponse(
-            trust_report_id=str(trust_report["trust_report_id"]),
-            scam_risk=trust_report["scam_risk"],
-            scam_reasons=trust_report.get("scam_reasons", []),
-            ghost_likelihood=trust_report["ghost_likelihood"],
-            ghost_reasons=trust_report.get("ghost_reasons", []),
-            staleness_score=trust_report.get("staleness_score"),
-            staleness_reasons=trust_report.get("staleness_reasons"),
-            scam_score=trust_report.get("scam_score") or report_data.get("scam_score"),
-            ghost_score=trust_report.get("ghost_score") or report_data.get("ghost_score"),
-            apply_link_status=trust_report.get("apply_link_status") or report_data.get("apply_link_status"),
-            domain_consistency_reasons=trust_report.get("domain_consistency_reasons") or report_data.get("domain_consistency_reasons"),
-            trust_score=trust_report.get("trust_score") or report_data.get("trust_score"),
+            **payload,
+            verified_at=trust_report.get("created_at"),
+            confidence=_build_confidence(payload),
+            community=community,
+            community_reasons=community_reasons,
+            next_steps=_build_next_steps(payload),
         )
+
+
+@router.post("/job/{job_target_id}/trust/feedback")
+async def submit_trust_feedback(
+    job_target_id: UUID,
+    request: TrustFeedbackRequest,
+    user_id: UUID = Depends(require_auth_user),
+):
+    """Community feedback loop for Trust Reports."""
+    feedback_kind = (request.feedback_kind or "").strip().lower()
+    dimension = (request.dimension or "overall").strip().lower()
+    value = (request.value or None)
+    if isinstance(value, str):
+        value = value.strip().lower() or None
+    comment = (request.comment or None)
+    if isinstance(comment, str):
+        comment = comment.strip()
+        if not comment:
+            comment = None
+        if comment and len(comment) > 800:
+            comment = comment[:800]
+
+    if feedback_kind not in ("report", "accuracy"):
+        raise HTTPException(status_code=400, detail="feedback_kind must be 'report' or 'accuracy'")
+    if dimension not in ("overall", "scam", "ghost", "staleness", "link"):
+        raise HTTPException(status_code=400, detail="dimension must be overall|scam|ghost|staleness|link")
+
+    if feedback_kind == "accuracy":
+        if value not in ("accurate", "inaccurate"):
+            raise HTTPException(status_code=400, detail="value must be 'accurate' or 'inaccurate' for accuracy feedback")
+    else:
+        # 'report' feedback: accept a small allowlist to keep aggregation stable
+        if value is None:
+            value = "other"
+        if value not in ("scam", "ghost", "expired", "other"):
+            value = "other"
+
+    async with db.connection() as conn:
+        # Ensure job target exists
+        jt = await conn.fetchval("SELECT 1 FROM job_targets WHERE job_target_id = $1", job_target_id)
+        if not jt:
+            raise HTTPException(status_code=404, detail="Job target not found")
+
+        await apply_storage.create_trust_report_feedback(
+            conn,
+            job_target_id=job_target_id,
+            user_id=user_id,
+            feedback_kind=feedback_kind,
+            dimension=dimension,
+            value=value,
+            comment=comment,
+        )
+        summary = await apply_storage.get_trust_report_feedback_summary(conn, job_target_id)
+        return {"ok": True, "community": summary}
 
 
 @router.post("/pack/generate")
@@ -1143,13 +1464,36 @@ async def create_application(
             status=request.status,
             notes=request.notes,
             reminder_at=request.reminder_at,
+            contact_email=request.contact_email,
+            contact_linkedin_url=request.contact_linkedin_url,
+            contact_phone=request.contact_phone,
         )
         
         return {
             "application_id": str(application["application_id"]),
+            "apply_pack_id": str(application["apply_pack_id"]) if application.get("apply_pack_id") else None,
+            "job_target_id": str(application["job_target_id"]) if application.get("job_target_id") else None,
             "status": application["status"],
             "applied_at": application["applied_at"].isoformat() if application.get("applied_at") else None,
+            "interview_at": application["interview_at"].isoformat() if application.get("interview_at") else None,
+            "offer_at": application["offer_at"].isoformat() if application.get("offer_at") else None,
+            "rejected_at": application["rejected_at"].isoformat() if application.get("rejected_at") else None,
+            "notes": application.get("notes"),
+            "reminder_at": application["reminder_at"].isoformat() if application.get("reminder_at") else None,
+            "contact_email": application.get("contact_email"),
+            "contact_linkedin_url": application.get("contact_linkedin_url"),
+            "contact_phone": application.get("contact_phone"),
         }
+
+
+@router.get("/insights")
+async def get_insights(
+    user_id: UUID = Depends(require_auth_user),
+):
+    """Aggregated feedback insights for recommendation cards (outcomes, rejection reasons)."""
+    async with db.connection() as conn:
+        insights = await apply_storage.get_user_feedback_insights(conn, user_id=user_id)
+    return insights
 
 
 @router.get("/application")
@@ -1173,13 +1517,21 @@ async def get_applications(
             "applications": [
                 {
                     "application_id": str(app["application_id"]),
+                    "apply_pack_id": str(app["apply_pack_id"]) if app.get("apply_pack_id") else None,
+                    "job_target_id": str(app["job_target_id"]) if app.get("job_target_id") else None,
                     "status": app["status"],
                     "title": app.get("title"),
                     "company": app.get("company"),
                     "job_url": app.get("job_url"),
                     "applied_at": app["applied_at"].isoformat() if app.get("applied_at") else None,
+                    "interview_at": app["interview_at"].isoformat() if app.get("interview_at") else None,
+                    "offer_at": app["offer_at"].isoformat() if app.get("offer_at") else None,
+                    "rejected_at": app["rejected_at"].isoformat() if app.get("rejected_at") else None,
                     "notes": app.get("notes"),
                     "reminder_at": app["reminder_at"].isoformat() if app.get("reminder_at") else None,
+                    "contact_email": app.get("contact_email"),
+                    "contact_linkedin_url": app.get("contact_linkedin_url"),
+                    "contact_phone": app.get("contact_phone"),
                 }
                 for app in applications
             ],
@@ -1224,6 +1576,18 @@ async def update_application(
             updates.append(f"reminder_at = ${param_idx}")
             values.append(request.reminder_at)
             param_idx += 1
+        if request.contact_email is not None:
+            updates.append(f"contact_email = ${param_idx}")
+            values.append(request.contact_email)
+            param_idx += 1
+        if request.contact_linkedin_url is not None:
+            updates.append(f"contact_linkedin_url = ${param_idx}")
+            values.append(request.contact_linkedin_url)
+            param_idx += 1
+        if request.contact_phone is not None:
+            updates.append(f"contact_phone = ${param_idx}")
+            values.append(request.contact_phone)
+            param_idx += 1
 
         if new_status == "interview":
             updates.append(f"interview_at = COALESCE(interview_at, ${param_idx})")
@@ -1260,6 +1624,10 @@ async def update_application(
             "application_id": str(row["application_id"]),
             "status": row["status"],
             "notes": row.get("notes"),
+            "reminder_at": row["reminder_at"].isoformat() if row.get("reminder_at") else None,
+            "contact_email": row.get("contact_email"),
+            "contact_linkedin_url": row.get("contact_linkedin_url"),
+            "contact_phone": row.get("contact_phone"),
         }
 
 

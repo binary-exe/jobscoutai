@@ -158,6 +158,11 @@ Examples:
         help="Skip enrichment (faster but less data)",
     )
     parser.add_argument(
+        "--discover",
+        action="store_true",
+        help="Enable ATS discovery (DuckDuckGo-based). Off by default for reliability/cost control.",
+    )
+    parser.add_argument(
         "--concurrency", "-c",
         type=int,
         default=12,
@@ -241,6 +246,7 @@ def build_criteria(args: argparse.Namespace) -> Criteria:
         concurrency=args.concurrency,
         use_browser=args.browser,
         use_cache=not args.no_cache,
+        enable_discovery=bool(getattr(args, "discover", False)),
     )
 
 

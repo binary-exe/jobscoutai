@@ -61,8 +61,10 @@ class WWRRssProvider(Provider):
                 # Title format is often "Company - Job Title"
                 title_tag = item.find("title")
                 link_tag = item.find("link")
+                guid_tag = item.find("guid")
                 raw_title = normalize_text(title_tag.get_text() if title_tag else "")
                 link = canonicalize_url(link_tag.get_text() if link_tag else "")
+                guid = normalize_text(guid_tag.get_text() if guid_tag else "")
 
                 if not raw_title or not link:
                     continue
@@ -118,6 +120,8 @@ class WWRRssProvider(Provider):
                 tags = [category] if category else []
 
                 job = NormalizedJob(
+                    # Stable ID for dedupe across runs (prefer guid; fallback to canonical link)
+                    provider_id=(guid or link),
                     scraped_at=now_utc(),
                     posted_at=posted_at,
                     source=self.name,

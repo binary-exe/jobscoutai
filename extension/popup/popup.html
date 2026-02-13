@@ -1,0 +1,58 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>JobScoutAI Saver</title>
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <div class="wrap">
+      <div class="title">JobScoutAI Saver</div>
+      <div class="subtle" id="statusLine">Loading…</div>
+
+      <div class="card">
+        <div class="cardTitle">Connect</div>
+        <div class="subtle">
+          Open JobScoutAI in the active tab, make sure you’re logged in, then click “Connect”.
+        </div>
+        <div class="row">
+          <button id="openAppBtn" class="btn secondary">Open JobScoutAI</button>
+          <button id="connectBtn" class="btn">Connect</button>
+        </div>
+        <div class="row">
+          <button id="disconnectBtn" class="btn danger">Disconnect</button>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="cardTitle">Save current job</div>
+        <div class="subtle">
+          Works best on job detail pages (LinkedIn / Indeed / ATS). No crawling — we only use what your browser already loaded.
+        </div>
+        <div class="row">
+          <button id="saveBtn" class="btn">Save job</button>
+          <button id="openApplyBtn" class="btn secondary">Open Apply</button>
+        </div>
+        <div class="subtle" id="resultLine"></div>
+        <div class="row mt-2">
+          <a id="openApplyAfterSave" href="#" target="_blank" rel="noopener noreferrer" class="btn secondary hidden">Open Apply Workspace →</a>
+        </div>
+      </div>
+
+      <details class="card">
+        <summary class="cardTitle">Settings</summary>
+        <label class="label" for="apiBase">API base</label>
+        <input id="apiBase" class="input" placeholder="https://jobscout-api.fly.dev/api/v1" />
+        <label class="label" for="appBase">App base</label>
+        <input id="appBase" class="input" placeholder="https://jobscoutai.vercel.app" />
+        <div class="row">
+          <button id="saveSettingsBtn" class="btn secondary">Save settings</button>
+        </div>
+      </details>
+    </div>
+
+    <script src="popup.js"></script>
+  </body>
+</html>
+
