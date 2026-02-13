@@ -10,6 +10,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import db
@@ -66,10 +67,16 @@ def create_app() -> FastAPI:
     # We keep the standard web origins allowlist, and add a regex for extension origins.
     _extension_origin_re = re.compile(r"^chrome-extension://[a-z0-9_-]+$", re.IGNORECASE)
 
+    # Always allow production frontend even if env misconfigured
+    _cors_origins_safe = list(settings.cors_origins)
+    for origin in ("https://jobscoutai.vercel.app", "http://localhost:3000"):
+        if origin not in _cors_origins_safe:
+            _cors_origins_safe.append(origin)
+
     def _is_allowed_origin(origin: str | None) -> bool:
         if not origin:
             return False
-        if origin in settings.cors_origins:
+        if origin in _cors_origins_safe:
             return True
         return bool(_extension_origin_re.match(origin))
 
@@ -80,10 +87,22 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
+    # CORS safety: ensure every response has CORS headers for allowed origins (fixes preflight/204)
+    class CORSEnforceMiddleware(BaseHTTPMiddleware):
+        async def dispatch(self, request: Request, call_next):
+            response = await call_next(request)
+            origin = request.headers.get("origin")
+            if _is_allowed_origin(origin) and "Access-Control-Allow-Origin" not in response.headers:
+                response.headers["Access-Control-Allow-Origin"] = origin
+                response.headers["Access-Control-Allow-Credentials"] = "true"
+            return response
+
+    app.add_middleware(CORSEnforceMiddleware)
+
     # CORS
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=settings.cors_origins,
+        allow_origins=_cors_origins_safe,
         allow_origin_regex=_extension_origin_re.pattern,
         allow_credentials=True,
         allow_methods=["*"],

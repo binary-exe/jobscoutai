@@ -48,19 +48,23 @@ async def capture_event(
     user_id: Optional[UUID] = user.user_id if user else None
     props_json = json.dumps(payload.properties or {}) if payload.properties is not None else None
 
-    async with db.connection() as conn:
-        await conn.execute(
-            """
-            INSERT INTO analytics_events (client_ts, event_name, user_id, distinct_id, path, properties)
-            VALUES ($1, $2, $3, $4, $5, $6::jsonb)
-            """,
-            payload.client_ts,
-            name,
-            user_id,
-            payload.distinct_id,
-            payload.path,
-            props_json,
-        )
+    try:
+        async with db.connection() as conn:
+            await conn.execute(
+                """
+                INSERT INTO analytics_events (client_ts, event_name, user_id, distinct_id, path, properties)
+                VALUES ($1, $2, $3, $4, $5, $6::jsonb)
+                """,
+                payload.client_ts,
+                name,
+                user_id,
+                payload.distinct_id,
+                payload.path,
+                props_json,
+            )
+    except Exception:
+        # Always return 204 so frontend is not blocked (table may not exist yet)
+        pass
 
     return Response(status_code=204)
 
