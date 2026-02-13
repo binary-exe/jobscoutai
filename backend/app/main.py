@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from fastapi.exceptions import RequestValidationError
 from starlette.exceptions import HTTPException as StarletteHTTPException
 from starlette.middleware.base import BaseHTTPMiddleware
+from starlette.responses import Response as StarletteResponse
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import db
@@ -87,9 +88,22 @@ def create_app() -> FastAPI:
         lifespan=lifespan,
     )
 
-    # CORS safety: ensure every response has CORS headers for allowed origins (fixes preflight/204)
-    class CORSEnforceMiddleware(BaseHTTPMiddleware):
+    # Handle OPTIONS preflight explicitly so CORS always succeeds (runs first = added last)
+    class PreflightCORSMiddleware(BaseHTTPMiddleware):
         async def dispatch(self, request: Request, call_next):
+            if request.method == "OPTIONS":
+                origin = request.headers.get("origin")
+                if _is_allowed_origin(origin):
+                    return StarletteResponse(
+                        status_code=204,
+                        headers={
+                            "Access-Control-Allow-Origin": origin,
+                            "Access-Control-Allow-Methods": "GET, POST, PUT, PATCH, DELETE, OPTIONS",
+                            "Access-Control-Allow-Headers": "*",
+                            "Access-Control-Allow-Credentials": "true",
+                            "Access-Control-Max-Age": "86400",
+                        },
+                    )
             response = await call_next(request)
             origin = request.headers.get("origin")
             if _is_allowed_origin(origin) and "Access-Control-Allow-Origin" not in response.headers:
@@ -97,7 +111,7 @@ def create_app() -> FastAPI:
                 response.headers["Access-Control-Allow-Credentials"] = "true"
             return response
 
-    app.add_middleware(CORSEnforceMiddleware)
+    app.add_middleware(PreflightCORSMiddleware)
 
     # CORS
     app.add_middleware(
