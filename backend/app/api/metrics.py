@@ -29,6 +29,16 @@ class EventIn(BaseModel):
     client_ts: Optional[datetime] = None
 
 
+@router.options("/event", include_in_schema=False)
+async def capture_event_options() -> Response:
+    """
+    Explicit OPTIONS handler to avoid noisy 4xx logs when a client sends OPTIONS without
+    standard CORS preflight headers (e.g., missing Origin). Real CORS preflights are
+    still handled by PreflightCORSMiddleware/CORSMiddleware.
+    """
+    return Response(status_code=204)
+
+
 @router.post("/event", status_code=204)
 async def capture_event(
     payload: EventIn,
