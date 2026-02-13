@@ -112,7 +112,7 @@ async def _find_user_from_webhook(conn, data: Dict[str, Any]):
     if isinstance(custom_data, str):
         try:
             custom_data = json.loads(custom_data)
-        except:
+        except Exception:
             custom_data = {}
     
     custom_user_id = custom_data.get("user_id")
@@ -227,7 +227,7 @@ async def _handle_subscription_cancelled(conn, data: Dict[str, Any]):
     if cancellation_effective_date:
         try:
             ends_at = datetime.fromisoformat(cancellation_effective_date.replace("Z", "+00:00"))
-        except:
+        except Exception:
             pass
     
     await apply_storage.update_user_plan(

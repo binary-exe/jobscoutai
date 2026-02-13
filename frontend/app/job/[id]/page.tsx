@@ -107,6 +107,8 @@ export default async function JobPage({ params }: PageProps) {
     notFound();
   }
 
+  // Stable "now" so server and client render the same relative time (avoids hydration #418/#422)
+  const nowIso = new Date().toISOString();
   const salary = formatSalary(job.salary_min, job.salary_max, job.salary_currency);
   const jsonLd = generateJobPostingJsonLd(job);
 
@@ -166,7 +168,7 @@ export default async function JobPage({ params }: PageProps) {
               
               <div className="flex items-center gap-1.5">
                 <Clock className="h-4 w-4" />
-                <span>{formatRelativeTime(job.posted_at || job.first_seen_at)}</span>
+                <span suppressHydrationWarning>{formatRelativeTime(job.posted_at || job.first_seen_at, nowIso)}</span>
               </div>
             </div>
             
@@ -358,7 +360,7 @@ export default async function JobPage({ params }: PageProps) {
           
           {/* Source attribution */}
           <p className="mt-6 text-center text-xs text-muted-foreground">
-            Source: {job.source} • Last updated {formatRelativeTime(job.last_seen_at)}
+            Source: {job.source} • Last updated <span suppressHydrationWarning>{formatRelativeTime(job.last_seen_at, nowIso)}</span>
           </p>
         </div>
       </main>

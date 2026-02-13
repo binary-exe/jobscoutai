@@ -46,6 +46,7 @@ export default async function HomePage({ searchParams }: PageProps) {
   ]);
 
   const totalPages = Math.ceil(jobsData.total / jobsData.page_size);
+  const nowIso = new Date().toISOString();
 
   return (
     <>
@@ -151,7 +152,7 @@ export default async function HomePage({ searchParams }: PageProps) {
                               className="animate-fade-in"
                               style={{ animationDelay: `${index * 50}ms` }}
                             >
-                              <JobCard job={job} />
+                              <JobCard job={job} nowIso={nowIso} />
                             </div>
                           ))}
                         </div>

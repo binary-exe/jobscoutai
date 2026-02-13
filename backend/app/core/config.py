@@ -7,8 +7,39 @@ import os
 from functools import lru_cache
 from typing import Any, Dict, List, Optional, Union
 
-from pydantic import field_validator, model_validator
+from pydantic import Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings
+
+_CORS_ENV = "JOBSCOUT_CORS_ORIGINS"
+_DEFAULT_CORS_RAW = '["http://localhost:3000","https://jobscoutai.vercel.app"]'
+
+
+def _parse_cors_origins(v: str) -> List[str]:
+    """Parse CORS origins from env string (JSON or comma-separated). Never raises."""
+    if not v or not isinstance(v, str):
+        return ["http://localhost:3000", "https://jobscoutai.vercel.app"]
+    v = v.strip()
+    if not v:
+        return ["http://localhost:3000", "https://jobscoutai.vercel.app"]
+    # Try JSON (double-quoted only)
+    try:
+        parsed = json.loads(v)
+        if isinstance(parsed, list):
+            return [x.strip() for x in parsed if isinstance(x, str) and x.strip()]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    # Try single-quoted JSON (replace ' with " for valid JSON)
+    try:
+        normalized = v.replace("'", '"')
+        parsed = json.loads(normalized)
+        if isinstance(parsed, list):
+            return [x.strip() for x in parsed if isinstance(x, str) and x.strip()]
+    except (json.JSONDecodeError, TypeError):
+        pass
+    # Comma-separated
+    if "," in v:
+        return [origin.strip() for origin in v.split(",") if origin.strip()]
+    return [v] if v else ["http://localhost:3000", "https://jobscoutai.vercel.app"]
 
 
 class Settings(BaseSettings):
@@ -24,58 +55,27 @@ class Settings(BaseSettings):
     use_sqlite: bool = False  # For local dev
     sqlite_path: str = "jobs.db"
 
-    # CORS
-    cors_origins: List[str] = [
-        "http://localhost:3000",
-        "https://jobscoutai.vercel.app",
-    ]
-    
+    # CORS: we read JOBSCOUT_CORS_ORIGINS from os.environ in validator so pydantic-settings
+    # never tries to JSON-decode it (which crashes on Fly with single-quoted or empty value).
+    cors_origins_raw: str = Field(
+        default=_DEFAULT_CORS_RAW,
+        description="JSON array or comma-separated origins",
+    )
+
     @model_validator(mode="before")
     @classmethod
-    def parse_cors_origins_before(cls, data: Any) -> Any:
-        """Parse CORS origins from environment variable before validation."""
-        if isinstance(data, dict) and "cors_origins" in data:
-            v = data["cors_origins"]
-            if isinstance(v, str):
-                # Try to parse as JSON first
-                try:
-                    parsed = json.loads(v)
-                    if isinstance(parsed, list):
-                        data["cors_origins"] = parsed
-                        return data
-                except (json.JSONDecodeError, TypeError):
-                    pass
-                # Fallback: treat as comma-separated string
-                if "," in v:
-                    data["cors_origins"] = [origin.strip() for origin in v.split(",") if origin.strip()]
-                    return data
-                # Single value
-                if v.strip():
-                    data["cors_origins"] = [v.strip()]
-                    return data
+    def inject_cors_from_env(cls, data: Any) -> Any:
+        # Read CORS from env ourselves so pydantic-settings never JSON-decodes it
+        env_val = os.environ.get(_CORS_ENV)
+        if env_val is not None and isinstance(data, dict):
+            data["cors_origins_raw"] = env_val
         return data
-    
-    @field_validator("cors_origins", mode="before")
-    @classmethod
-    def parse_cors_origins(cls, v: Union[str, List[str]]) -> List[str]:
-        """Parse CORS origins from JSON string or list."""
-        if isinstance(v, list):
-            return v
-        if isinstance(v, str):
-            # Try to parse as JSON first
-            try:
-                parsed = json.loads(v)
-                if isinstance(parsed, list):
-                    return parsed
-            except (json.JSONDecodeError, TypeError):
-                pass
-            # Fallback: treat as comma-separated string
-            if "," in v:
-                return [origin.strip() for origin in v.split(",") if origin.strip()]
-            # Single value
-            if v.strip():
-                return [v.strip()]
-        return ["http://localhost:3000", "https://jobscoutai.vercel.app"]
+
+    @computed_field
+    @property
+    def cors_origins_list(self) -> List[str]:
+        """Parsed CORS origins (do not name 'cors_origins' or env JOBSCOUT_CORS_ORIGINS is matched and JSON-decoded)."""
+        return _parse_cors_origins(self.cors_origins_raw)
 
     @field_validator("scheduled_queries", mode="before")
     @classmethod

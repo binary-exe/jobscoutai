@@ -61,7 +61,7 @@ async def _run_scrape_background(
                         errors=1,
                         sources=""
                     )
-            except:
+            except Exception:
                 pass
     finally:
         # Release in-flight slot (best-effort). Import inside function to avoid import-time cycles.

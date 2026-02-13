@@ -69,7 +69,7 @@ def create_app() -> FastAPI:
     _extension_origin_re = re.compile(r"^chrome-extension://[a-z0-9_-]+$", re.IGNORECASE)
 
     # Always allow production frontend even if env misconfigured
-    _cors_origins_safe = list(settings.cors_origins)
+    _cors_origins_safe = list(settings.cors_origins_list)
     for origin in ("https://jobscoutai.vercel.app", "http://localhost:3000"):
         if origin not in _cors_origins_safe:
             _cors_origins_safe.append(origin)

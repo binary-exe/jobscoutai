@@ -7,6 +7,8 @@ import { cn } from '@/lib/utils';
 
 interface JobCardProps {
   job: Job;
+  /** Pass from server (e.g. new Date().toISOString()) so server/client match and avoid hydration errors */
+  nowIso?: string;
   className?: string;
 }
 
@@ -17,7 +19,7 @@ const REMOTE_STYLES = {
   unknown: 'bg-muted text-muted-foreground',
 };
 
-export function JobCard({ job, className }: JobCardProps) {
+export function JobCard({ job, nowIso, className }: JobCardProps) {
   const salary = formatSalary(job.salary_min, job.salary_max, job.salary_currency);
   const hasFlags = job.ai_flags && job.ai_flags.length > 0;
   
@@ -109,7 +111,7 @@ export function JobCard({ job, className }: JobCardProps) {
       <div className="mt-4 flex items-center justify-between text-xs text-muted-foreground">
         <div className="flex items-center gap-1">
           <Clock className="h-3 w-3" />
-          <span>{formatRelativeTime(job.posted_at || job.first_seen_at)}</span>
+          <span suppressHydrationWarning>{formatRelativeTime(job.posted_at || job.first_seen_at, nowIso)}</span>
         </div>
         
         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">

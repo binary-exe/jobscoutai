@@ -90,6 +90,8 @@ export default async function RemoteRoleJobsPage({ params }: PageProps) {
   } catch {
     // Fallback to empty on error
   }
+
+  const nowIso = new Date().toISOString();
   
   return (
     <>
@@ -132,9 +134,9 @@ export default async function RemoteRoleJobsPage({ params }: PageProps) {
                             {job.location_raw}
                           </span>
                         )}
-                        <span className="flex items-center gap-1">
+                        <span className="flex items-center gap-1" suppressHydrationWarning>
                           <Clock className="h-3.5 w-3.5" />
-                          {formatRelativeTime(job.posted_at || job.first_seen_at)}
+                          {formatRelativeTime(job.posted_at || job.first_seen_at, nowIso)}
                         </span>
                       </div>
                       {(job.salary_min || job.salary_max) && (

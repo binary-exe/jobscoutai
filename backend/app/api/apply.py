@@ -852,7 +852,7 @@ async def generate_trust_report(
         if isinstance(extracted_json, str):
             try:
                 extracted_json = json.loads(extracted_json)
-            except:
+            except Exception:
                 extracted_json = {}
         elif extracted_json is None:
             extracted_json = {}
@@ -1031,7 +1031,7 @@ async def generate_apply_pack(
             if isinstance(skills, str):
                 try:
                     skills = json.loads(skills)
-                except:
+                except Exception:
                     skills = []
             elif skills is None:
                 skills = []
@@ -1039,7 +1039,7 @@ async def generate_apply_pack(
             if isinstance(bullets, str):
                 try:
                     bullets = json.loads(bullets)
-                except:
+                except Exception:
                     bullets = []
             elif bullets is None:
                 bullets = []
@@ -1095,7 +1095,7 @@ async def generate_apply_pack(
             if isinstance(must_haves, str):
                 try:
                     must_haves = json.loads(must_haves)
-                except:
+                except Exception:
                     must_haves = []
             elif must_haves is None:
                 must_haves = []
@@ -1103,7 +1103,7 @@ async def generate_apply_pack(
             if isinstance(keywords, str):
                 try:
                     keywords = json.loads(keywords)
-                except:
+                except Exception:
                     keywords = []
             elif keywords is None:
                 keywords = []
@@ -1125,7 +1125,7 @@ async def generate_apply_pack(
             if isinstance(bullets, str):
                 try:
                     bullets = json.loads(bullets)
-                except:
+                except Exception:
                     bullets = []
             elif bullets is None:
                 bullets = []
@@ -1134,7 +1134,7 @@ async def generate_apply_pack(
             if isinstance(checklist, str):
                 try:
                     checklist = json.loads(checklist)
-                except:
+                except Exception:
                     checklist = {}
             elif checklist is None:
                 checklist = {}
@@ -1154,7 +1154,7 @@ async def generate_apply_pack(
         if isinstance(extracted_json, str):
             try:
                 extracted_json = json.loads(extracted_json)
-            except:
+            except Exception:
                 extracted_json = {}
         elif extracted_json is None:
             extracted_json = {}
@@ -1258,7 +1258,7 @@ async def get_apply_pack(
         if isinstance(tailored_bullets, str):
             try:
                 tailored_bullets = json.loads(tailored_bullets)
-            except:
+            except Exception:
                 tailored_bullets = []
         elif tailored_bullets is None:
             tailored_bullets = []
@@ -1267,7 +1267,7 @@ async def get_apply_pack(
         if isinstance(ats_checklist, str):
             try:
                 ats_checklist = json.loads(ats_checklist)
-            except:
+            except Exception:
                 ats_checklist = {}
         elif ats_checklist is None:
             ats_checklist = {}
@@ -1343,7 +1343,7 @@ async def export_apply_pack_docx(
         if isinstance(tailored_bullets, str):
             try:
                 tailored_bullets = json.loads(tailored_bullets)
-            except:
+            except Exception:
                 tailored_bullets = []
         elif tailored_bullets is None:
             tailored_bullets = []
@@ -1689,7 +1689,7 @@ async def create_application_feedback(
         if isinstance(parsed_data, str):
             try:
                 parsed_data = json.loads(parsed_data)
-            except:
+            except Exception:
                 parsed_data = {}
         elif parsed_data is None:
             parsed_data = {}
@@ -1727,7 +1727,7 @@ async def get_application_feedback(
             if isinstance(parsed_data, str):
                 try:
                     parsed_data = json.loads(parsed_data)
-                except:
+                except Exception:
                     parsed_data = {}
             elif parsed_data is None:
                 parsed_data = {}

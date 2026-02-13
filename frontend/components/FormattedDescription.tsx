@@ -86,12 +86,11 @@ export function FormattedDescription({ text, className = '' }: FormattedDescript
   }, [text]);
 
   return (
-    <div 
+    <div
       className={`prose prose-sm max-w-none text-foreground ${className}`}
       dangerouslySetInnerHTML={{ __html: formatted }}
-      style={{
-        lineHeight: '1.7',
-      }}
+      style={{ lineHeight: '1.7' }}
+      suppressHydrationWarning
     />
   );
 }
