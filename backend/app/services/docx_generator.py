@@ -690,6 +690,110 @@ def _setup_resume_styles(doc: "Document") -> None:
     # We intentionally do NOT rely on Word's built-in list styles for bullets.
     # Different Word templates render those differently, causing indentation drift.
 
+    # ---------- Premium ATS-safe custom styles ----------
+    # (Still single-column, no tables/columns/icons; just typographic hierarchy)
+    try:
+        if "ResumeName" not in [s.name for s in doc.styles]:
+            s_name = doc.styles.add_style("ResumeName", WD_STYLE_TYPE.PARAGRAPH)
+        else:
+            s_name = doc.styles["ResumeName"]
+        s_name.base_style = doc.styles["Normal"]
+        s_name.font.name = "Calibri"
+        s_name.font.size = Pt(20)
+        s_name.font.bold = True
+        s_name.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
+        s_name.paragraph_format.space_after = Pt(2)
+    except Exception:
+        pass
+
+    try:
+        if "ResumeTitle" not in [s.name for s in doc.styles]:
+            s_title = doc.styles.add_style("ResumeTitle", WD_STYLE_TYPE.PARAGRAPH)
+        else:
+            s_title = doc.styles["ResumeTitle"]
+        s_title.base_style = doc.styles["Normal"]
+        s_title.font.name = "Calibri"
+        s_title.font.size = Pt(11.5)
+        s_title.font.bold = False
+        s_title.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
+        s_title.paragraph_format.space_after = Pt(4)
+    except Exception:
+        pass
+
+    try:
+        if "ResumeContact" not in [s.name for s in doc.styles]:
+            s_contact = doc.styles.add_style("ResumeContact", WD_STYLE_TYPE.PARAGRAPH)
+        else:
+            s_contact = doc.styles["ResumeContact"]
+        s_contact.base_style = doc.styles["Normal"]
+        s_contact.font.name = "Calibri"
+        s_contact.font.size = Pt(9.5)
+        s_contact.font.color.rgb = RGBColor(0x33, 0x33, 0x33)
+        s_contact.paragraph_format.space_after = Pt(10)
+    except Exception:
+        pass
+
+    try:
+        if "ResumeSection" not in [s.name for s in doc.styles]:
+            s_sec = doc.styles.add_style("ResumeSection", WD_STYLE_TYPE.PARAGRAPH)
+        else:
+            s_sec = doc.styles["ResumeSection"]
+        s_sec.base_style = doc.styles["Normal"]
+        s_sec.font.name = "Calibri"
+        s_sec.font.size = Pt(11)
+        s_sec.font.bold = True
+        s_sec.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
+        s_sec.paragraph_format.space_before = Pt(12)
+        s_sec.paragraph_format.space_after = Pt(4)
+    except Exception:
+        pass
+
+    try:
+        if "ResumeBody" not in [s.name for s in doc.styles]:
+            s_body = doc.styles.add_style("ResumeBody", WD_STYLE_TYPE.PARAGRAPH)
+        else:
+            s_body = doc.styles["ResumeBody"]
+        s_body.base_style = doc.styles["Normal"]
+        s_body.font.name = "Calibri"
+        s_body.font.size = Pt(10.5)
+        s_body.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
+        s_body.paragraph_format.space_after = Pt(3)
+        s_body.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+    except Exception:
+        pass
+
+    try:
+        if "ResumeBullet" not in [s.name for s in doc.styles]:
+            s_b = doc.styles.add_style("ResumeBullet", WD_STYLE_TYPE.PARAGRAPH)
+        else:
+            s_b = doc.styles["ResumeBullet"]
+        s_b.base_style = doc.styles["Normal"]
+        s_b.font.name = "Calibri"
+        s_b.font.size = Pt(10.5)
+        s_b.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
+        pf = s_b.paragraph_format
+        pf.space_before = Pt(0)
+        pf.space_after = Pt(2)
+        pf.line_spacing_rule = WD_LINE_SPACING.SINGLE
+        pf.left_indent = Inches(0.30)
+        pf.first_line_indent = Inches(-0.15)
+    except Exception:
+        pass
+
+    try:
+        if "ResumeRole" not in [s.name for s in doc.styles]:
+            s_role = doc.styles.add_style("ResumeRole", WD_STYLE_TYPE.PARAGRAPH)
+        else:
+            s_role = doc.styles["ResumeRole"]
+        s_role.base_style = doc.styles["Normal"]
+        s_role.font.name = "Calibri"
+        s_role.font.size = Pt(11)
+        s_role.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
+        s_role.paragraph_format.space_before = Pt(8)
+        s_role.paragraph_format.space_after = Pt(2)
+    except Exception:
+        pass
+
 
 def _add_bullet_paragraph(doc: "Document", text: str) -> None:
     """
@@ -699,7 +803,11 @@ def _add_bullet_paragraph(doc: "Document", text: str) -> None:
     t = _strip_bullet_prefix(_strip_leading_markers(_clean_docx_text(text)))
     if not t:
         return
-    para = doc.add_paragraph()
+    # Use our deterministic bullet style if available
+    try:
+        para = doc.add_paragraph(style="ResumeBullet")
+    except Exception:
+        para = doc.add_paragraph()
     pf = para.paragraph_format
     pf.space_before = Pt(0)
     pf.space_after = Pt(2)
@@ -799,7 +907,10 @@ def _add_horizontal_line(doc):
 
 def _add_section_header(doc, title: str):
     """Add a styled section header."""
-    para = doc.add_paragraph()
+    try:
+        para = doc.add_paragraph(style="ResumeSection")
+    except Exception:
+        para = doc.add_paragraph()
     para.paragraph_format.space_before = Pt(14)
     para.paragraph_format.space_after = Pt(6)
     
@@ -922,7 +1033,10 @@ def generate_resume_docx(
     # ==================== HEADER ====================
     # Name
     name = _clean_docx_text(parsed.get('name', 'Your Name'))
-    name_para = doc.add_paragraph()
+    try:
+        name_para = doc.add_paragraph(style="ResumeName")
+    except Exception:
+        name_para = doc.add_paragraph()
     name_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
     name_run = name_para.add_run(name.upper())
     name_run.bold = True
@@ -933,7 +1047,10 @@ def generate_resume_docx(
     # Title/Headline
     title = _clean_docx_text(parsed.get('title', ''))
     if title:
-        title_para = doc.add_paragraph()
+        try:
+            title_para = doc.add_paragraph(style="ResumeTitle")
+        except Exception:
+            title_para = doc.add_paragraph()
         title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         title_run = title_para.add_run(title)
         title_run.font.size = Pt(11)
@@ -969,7 +1086,10 @@ def generate_resume_docx(
             contact_parts.append(u)
     
     if contact_parts:
-        contact_para = doc.add_paragraph()
+        try:
+            contact_para = doc.add_paragraph(style="ResumeContact")
+        except Exception:
+            contact_para = doc.add_paragraph()
         contact_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
         # Keep only the most important items to avoid wrapping/indent glitches in Word.
         # Order is already: email, phone, location, links...
@@ -984,11 +1104,17 @@ def generate_resume_docx(
     # ==================== PROFESSIONAL SUMMARY ====================
     _add_section_header(doc, 'Professional Summary')
     
-    # Use tailored summary if provided, otherwise original
-    summary_text = tailored_summary if tailored_summary else parsed.get('summary', '')
+    # Prefer AI-crafted structured summary if provided via override.
+    if isinstance(resume_structure_override, dict) and resume_structure_override.get("summary"):
+        summary_text = str(resume_structure_override.get("summary") or "")
+    else:
+        summary_text = tailored_summary if tailored_summary else parsed.get('summary', '')
     if summary_text:
         for ptxt in _split_paragraphs(summary_text)[:3]:
-            summary_para = doc.add_paragraph(_clean_docx_text(ptxt))
+            try:
+                summary_para = doc.add_paragraph(_clean_docx_text(ptxt), style="ResumeBody")
+            except Exception:
+                summary_para = doc.add_paragraph(_clean_docx_text(ptxt))
             summary_para.paragraph_format.space_after = Pt(4)
             summary_para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
         doc.add_paragraph().paragraph_format.space_after = Pt(2)
@@ -1010,7 +1136,10 @@ def generate_resume_docx(
         _add_section_header(doc, 'Technical Skills')
         for skill_group in skills:
             if isinstance(skill_group, dict) and skill_group.get('category'):
-                para = doc.add_paragraph()
+                try:
+                    para = doc.add_paragraph(style="ResumeBody")
+                except Exception:
+                    para = doc.add_paragraph()
                 cat_run = para.add_run(f"{skill_group['category']}: ")
                 cat_run.bold = True
                 para.add_run(', '.join(skill_group.get('items', [])))
@@ -1036,15 +1165,20 @@ def generate_resume_docx(
             kw_para.paragraph_format.space_after = Pt(4)
     
     # ==================== EXPERIENCE ====================
-    experience = experience_override if (isinstance(experience_override, list) and experience_override) else parsed.get('experience', [])
+    # Prefer full structured experience if provided by optimized_resume.
+    override_exp = None
+    if isinstance(resume_structure_override, dict) and isinstance(resume_structure_override.get("experience"), list):
+        override_exp = resume_structure_override.get("experience")
+    experience = override_exp if override_exp else (experience_override if (isinstance(experience_override, list) and experience_override) else parsed.get('experience', []))
     if experience:
         _add_section_header(doc, 'Professional Experience')
         
         for exp in experience:
             # Job line with right-aligned dates (using tab stop)
-            job_para = doc.add_paragraph()
-            job_para.paragraph_format.space_before = Pt(8)
-            job_para.paragraph_format.space_after = Pt(2)
+            try:
+                job_para = doc.add_paragraph(style="ResumeRole")
+            except Exception:
+                job_para = doc.add_paragraph()
 
             # Title (bold)
             title_run = job_para.add_run(_clean_docx_text(exp.get("title", "Position")))
@@ -1075,12 +1209,18 @@ def generate_resume_docx(
         _add_section_header(doc, 'Projects')
         
         for proj in projects:
-            proj_para = doc.add_paragraph()
+            try:
+                proj_para = doc.add_paragraph(style="ResumeBody")
+            except Exception:
+                proj_para = doc.add_paragraph()
             proj_para.paragraph_format.space_before = Pt(6)
             proj_para.paragraph_format.space_after = Pt(2)
             
             # Project name (bold)
-            name_run = proj_para.add_run(_clean_docx_text(_strip_leading_markers(proj.get('name', 'Project'))))
+            pname = proj.get('name', 'Project')
+            if not pname:
+                pname = "Project"
+            name_run = proj_para.add_run(_clean_docx_text(_strip_leading_markers(pname)))
             name_run.bold = True
             
             # URL
@@ -1109,7 +1249,10 @@ def generate_resume_docx(
         _add_section_header(doc, 'Education')
         
         for edu in education:
-            edu_para = doc.add_paragraph()
+            try:
+                edu_para = doc.add_paragraph(style="ResumeBody")
+            except Exception:
+                edu_para = doc.add_paragraph()
             edu_para.paragraph_format.space_after = Pt(4)
             
             # Degree (bold)

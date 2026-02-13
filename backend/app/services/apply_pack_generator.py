@@ -692,11 +692,16 @@ Return JSON with this exact shape:
         for p in data.get("projects")[:6]:
             if not isinstance(p, dict):
                 continue
+            name = str(p.get("name") or "").strip()
+            url = str(p.get("url") or "").strip()
+            if not name:
+                # Don't emit anonymous projects; they render poorly and look unpolished.
+                continue
             bullets = _filter_bullets(p.get("bullets"))[:3]
             proj_out.append(
                 {
-                    "name": str(p.get("name") or ""),
-                    "url": str(p.get("url") or ""),
+                    "name": name,
+                    "url": url,
                     "bullets": bullets,
                 }
             )
