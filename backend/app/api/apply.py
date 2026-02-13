@@ -1539,6 +1539,20 @@ async def export_apply_pack_docx(
             # Parse resume to extract applicant info for cover letter
             resume_text = apply_pack.get("resume_text", "")
             parsed_resume = docx_generator._parse_resume_into_structure(resume_text) if resume_text else {}
+
+            # Parse ats_checklist (may include AI-optimized experience bullets)
+            import json
+            ats_checklist = apply_pack.get("ats_checklist")
+            if isinstance(ats_checklist, str):
+                try:
+                    ats_checklist = json.loads(ats_checklist)
+                except Exception:
+                    ats_checklist = {}
+            elif ats_checklist is None:
+                ats_checklist = {}
+            optimized_experience = None
+            if isinstance(ats_checklist, dict) and isinstance(ats_checklist.get("optimized_experience"), list):
+                optimized_experience = ats_checklist.get("optimized_experience")
             
             # Extract applicant contact info
             applicant_name = parsed_resume.get('name', '')
@@ -1571,6 +1585,7 @@ async def export_apply_pack_docx(
                     tailored_bullets=tailored_bullets,
                     original_resume_text=resume_text,
                     job_keywords=job_keywords or None,
+                    experience_override=optimized_experience,
                 )
                 filename = "tailored_resume.docx"
                 media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

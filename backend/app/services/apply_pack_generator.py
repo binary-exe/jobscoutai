@@ -191,6 +191,17 @@ async def generate_apply_pack(
         
         # Calculate ATS checklist
         ats_checklist = _calculate_ats_checklist(resume_analysis, job_analysis)
+
+        # AI-optimize experience bullets (truth-preserving rewrite) to improve ATS + human review.
+        optimized_experience = await _generate_optimized_experience(
+            client,
+            resume_text=resume_text,
+            resume_analysis=resume_analysis,
+            job_analysis=job_analysis,
+            job_title=job_title,
+        )
+        if optimized_experience:
+            ats_checklist["optimized_experience"] = optimized_experience
         
         return {
             "tailored_summary": summary,
@@ -237,6 +248,14 @@ Do not invent skills/tools/employers. Prefer plain ASCII punctuation."""
     if not skills:
         skills = _fallback_skills_from_text(resume_text, max_items=8)
     bullets = _ensure_list(resume_analysis.get('bullets'))
+    sample_achievements = []
+    for b in bullets[:4]:
+        if isinstance(b, dict):
+            txt = str(b.get("text") or "").strip()
+        else:
+            txt = str(b).strip()
+        if txt:
+            sample_achievements.append(txt)
     must_haves = _ensure_list(job_analysis.get('must_haves'), 5)
     keywords = _ensure_list(job_analysis.get('keywords'), 10)
     
@@ -247,6 +266,7 @@ Resume highlights:
 - Target role: {job_title or 'N/A'}
 - Seniority: {resume_analysis.get('seniority', 'mid')}
 - Key achievements: {len(bullets)} quantified results
+ - Example achievements (verbatim): {' | '.join(sample_achievements[:2]) if sample_achievements else 'N/A'}
 
 Job requirements:
 - Must-haves: {', '.join(str(m) for m in must_haves)}
@@ -261,6 +281,7 @@ Write a summary that:
 5. Addresses any past feedback patterns mentioned above
 6. Uses simple punctuation (avoid fancy dashes/quotes)
 7. Avoids keyword stuffing; include only keywords that are true for the candidate
+8. Mentions at least one concrete outcome/metric from the resume if available
 
 Summary:"""
     
@@ -355,6 +376,151 @@ Each bullet should:
         {"text": b.get("text", "") if isinstance(b, dict) else str(b), "match_score": 70}
         for b in existing_bullets
     ]
+
+
+def _score_experience_relevance(exp: Dict[str, Any], keywords: List[str]) -> int:
+    text = " ".join(
+        [
+            str(exp.get("title") or ""),
+            str(exp.get("company") or ""),
+            str(exp.get("location") or ""),
+            " ".join([str(x) for x in (exp.get("bullets") or [])]),
+        ]
+    ).lower()
+    score = 0
+    for k in keywords[:20]:
+        kl = str(k or "").lower().strip()
+        if not kl:
+            continue
+        if kl in text:
+            score += 1
+    return score
+
+
+async def _generate_optimized_experience(
+    client,
+    *,
+    resume_text: str,
+    resume_analysis: Dict[str, Any],
+    job_analysis: Dict[str, Any],
+    job_title: Optional[str],
+) -> Optional[List[Dict[str, Any]]]:
+    """
+    Rewrite experience bullets to be outcome-driven and keyword-aligned while staying truthful.
+    Output is used for DOCX export only; it does not change stored resume text.
+    """
+    try:
+        from backend.app.services import docx_generator
+    except Exception:
+        return None
+
+    parsed = docx_generator._parse_resume_into_structure(resume_text or "") if resume_text else {}
+    experience = parsed.get("experience") if isinstance(parsed, dict) else None
+    if not isinstance(experience, list) or not experience:
+        return None
+
+    job_keywords = _ensure_list(job_analysis.get("keywords"), 20)
+    must_haves = _ensure_list(job_analysis.get("must_haves"), 10)
+    all_terms = [str(x) for x in (must_haves + job_keywords) if str(x or "").strip()]
+
+    # Pick up to 3 most relevant roles to optimize (cost guardrail)
+    ranked = sorted(experience, key=lambda e: _score_experience_relevance(e if isinstance(e, dict) else {}, all_terms), reverse=True)
+    selected = []
+    for e in ranked:
+        if not isinstance(e, dict):
+            continue
+        bullets = e.get("bullets") or []
+        if not isinstance(bullets, list) or not bullets:
+            continue
+        selected.append(
+            {
+                "title": e.get("title", ""),
+                "company": e.get("company", ""),
+                "location": e.get("location", ""),
+                "dates": e.get("dates", ""),
+                "bullets": [str(b) for b in bullets[:6] if str(b or "").strip()],
+            }
+        )
+        if len(selected) >= 3:
+            break
+    if not selected:
+        return None
+
+    allowed_skills = _clean_skills_list(resume_analysis.get("skills"), 25)
+
+    system_prompt = (
+        "You are an expert resume editor. Rewrite bullets to be outcome-driven and ATS-friendly, "
+        "while remaining strictly truthful. Do not invent skills, tools, metrics, employers, or scope."
+    )
+
+    import json
+    selected_json = json.dumps(selected, ensure_ascii=True)
+
+    prompt = f"""
+Rewrite the EXPERIENCE bullets below for ATS + human reviewers.
+
+CONTEXT:
+- Target role: {job_title or 'N/A'}
+- Job must-haves: {', '.join(str(x) for x in must_haves[:8])}
+- Job keywords: {', '.join(str(x) for x in job_keywords[:12])}
+- Allowed skills/tools (from resume analysis): {', '.join(allowed_skills[:20]) if allowed_skills else 'N/A'}
+
+INPUT EXPERIENCE (verbatim):
+{selected_json}
+
+Rules:
+- Keep each role's title/company/location/dates unchanged.
+- Rewrite bullets to be clearer and more outcome-driven.
+- Preserve all numbers/metrics exactly; do not add new metrics.
+- Do NOT add new tools/skills not already present in the input bullets or allowed skills/tools list.
+- Use past tense, active voice, and simple punctuation.
+- 2-5 bullets per role; you may merge/split bullets only if it does not change meaning.
+- Output must be valid JSON only.
+
+Return JSON with this exact shape:
+{{
+  "experience": [
+    {{
+      "title": "...",
+      "company": "...",
+      "location": "...",
+      "dates": "...",
+      "bullets": ["...", "..."]
+    }}
+  ]
+}}
+"""
+
+    resp = await client.complete(prompt, system_prompt=system_prompt, json_mode=True)
+    if not resp or not getattr(resp, "ok", False) or not getattr(resp, "json_data", None):
+        return None
+    data = resp.json_data
+    if not isinstance(data, dict) or not isinstance(data.get("experience"), list):
+        return None
+    out: List[Dict[str, Any]] = []
+    for e in data.get("experience", [])[:3]:
+        if not isinstance(e, dict):
+            continue
+        bullets = e.get("bullets")
+        if not isinstance(bullets, list) or not bullets:
+            continue
+        clean_bullets = []
+        for b in bullets[:6]:
+            bt = str(b or "").strip()
+            if bt:
+                clean_bullets.append(bt)
+        if not clean_bullets:
+            continue
+        out.append(
+            {
+                "title": str(e.get("title") or ""),
+                "company": str(e.get("company") or ""),
+                "location": str(e.get("location") or ""),
+                "dates": str(e.get("dates") or ""),
+                "bullets": clean_bullets[:5],
+            }
+        )
+    return out or None
 
 
 async def _generate_cover_note(

@@ -857,8 +857,20 @@ def _select_relevant_keywords(
         kl = k.lower()
         if kl in seen:
             continue
+        def _present(h: str, needle: str) -> bool:
+            # Avoid false positives like "Java" matching inside "Javaid".
+            n = (needle or "").strip()
+            if not n:
+                return False
+            nl = n.lower()
+            # If keyword is a simple word, require word boundaries.
+            if re.fullmatch(r"[a-z0-9]+", nl):
+                return bool(re.search(rf"(?<![a-z0-9]){re.escape(nl)}(?![a-z0-9])", h, flags=re.I))
+            # If keyword contains punctuation/spaces, fall back to substring match.
+            return nl in h
+
         # Only include if it's already present somewhere (no stuffing).
-        if kl in hay:
+        if _present(hay, kl):
             out.append(k)
             seen.add(kl)
         if len(out) >= max_items:
@@ -871,6 +883,7 @@ def generate_resume_docx(
     tailored_bullets: list[Dict[str, Any]],
     original_resume_text: Optional[str] = None,
     job_keywords: Optional[list[str]] = None,
+    experience_override: Optional[list[Dict[str, Any]]] = None,
 ) -> BytesIO:
     """
     Generate a complete ATS-friendly tailored resume DOCX.
@@ -1016,7 +1029,7 @@ def generate_resume_docx(
             kw_para.paragraph_format.space_after = Pt(4)
     
     # ==================== EXPERIENCE ====================
-    experience = parsed.get('experience', [])
+    experience = experience_override if (isinstance(experience_override, list) and experience_override) else parsed.get('experience', [])
     if experience:
         _add_section_header(doc, 'Professional Experience')
         
