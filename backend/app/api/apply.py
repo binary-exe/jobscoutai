@@ -1551,8 +1551,11 @@ async def export_apply_pack_docx(
             elif ats_checklist is None:
                 ats_checklist = {}
             optimized_experience = None
+            optimized_resume = None
             if isinstance(ats_checklist, dict) and isinstance(ats_checklist.get("optimized_experience"), list):
                 optimized_experience = ats_checklist.get("optimized_experience")
+            if isinstance(ats_checklist, dict) and isinstance(ats_checklist.get("optimized_resume"), dict):
+                optimized_resume = ats_checklist.get("optimized_resume")
             
             # Extract applicant contact info
             applicant_name = parsed_resume.get('name', '')
@@ -1586,6 +1589,7 @@ async def export_apply_pack_docx(
                     original_resume_text=resume_text,
                     job_keywords=job_keywords or None,
                     experience_override=optimized_experience,
+                    resume_structure_override=optimized_resume,
                 )
                 filename = "tailored_resume.docx"
                 media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"

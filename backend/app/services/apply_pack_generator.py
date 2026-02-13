@@ -202,6 +202,19 @@ async def generate_apply_pack(
         )
         if optimized_experience:
             ats_checklist["optimized_experience"] = optimized_experience
+
+        # Full AI-crafted resume structure for premium + ATS-safe export (best-effort).
+        optimized_resume = await _generate_optimized_resume_structure(
+            client,
+            resume_text=resume_text,
+            resume_analysis=resume_analysis,
+            job_analysis=job_analysis,
+            job_title=job_title,
+            tailored_summary=summary,
+            tailored_bullets=bullets,
+        )
+        if optimized_resume:
+            ats_checklist["optimized_resume"] = optimized_resume
         
         return {
             "tailored_summary": summary,
@@ -521,6 +534,201 @@ Return JSON with this exact shape:
             }
         )
     return out or None
+
+
+def _extract_numeric_tokens(text: str) -> set[str]:
+    """
+    Extract numeric-ish tokens to prevent the model from inventing metrics.
+    Examples: 99.9%, 20-50+, 34%, 18, 18h, 2x, $10K
+    """
+    t = (text or "").lower()
+    tokens = set()
+    for m in re.findall(r"(?<![a-z0-9])(\$?\d[\d\.,]*\+?(?:-\d[\d\.,]*\+?)?(?:%|x|k|m|b)?)(?![a-z0-9])", t):
+        if m:
+            tokens.add(m)
+    return tokens
+
+
+async def _generate_optimized_resume_structure(
+    client,
+    *,
+    resume_text: str,
+    resume_analysis: Dict[str, Any],
+    job_analysis: Dict[str, Any],
+    job_title: Optional[str],
+    tailored_summary: str,
+    tailored_bullets: List[Dict[str, Any]],
+) -> Optional[Dict[str, Any]]:
+    """
+    Generate a full, premium-feeling but ATS-safe structured resume.
+    Renderer remains deterministic; this function only shapes content.
+    """
+    try:
+        from backend.app.services import docx_generator
+    except Exception:
+        return None
+
+    parsed = docx_generator._parse_resume_into_structure(resume_text or "") if resume_text else {}
+    if not isinstance(parsed, dict) or not parsed:
+        return None
+
+    must_haves = _ensure_list(job_analysis.get("must_haves"), 10)
+    keywords = _ensure_list(job_analysis.get("keywords"), 20)
+    allowed_skills = _clean_skills_list(resume_analysis.get("skills"), 30)
+
+    # Anti-hallucination: keep a set of numeric tokens present in the original resume text
+    allowed_numbers = _extract_numeric_tokens(resume_text or "")
+
+    import json
+    parsed_json = json.dumps(parsed, ensure_ascii=True)
+    tailored_bullets_json = json.dumps(tailored_bullets or [], ensure_ascii=True)
+
+    system_prompt = (
+        "You are an expert resume writer. Produce ATS-friendly, premium-feeling resumes. "
+        "Be precise and truthful: do not invent employers, roles, dates, tools, or metrics."
+    )
+
+    prompt = f"""
+Create an ATS-friendly resume STRUCTURE from the input resume. Improve clarity, ordering, and bullet quality.
+
+TARGET ROLE:
+{job_title or 'N/A'}
+
+JOB REQUIREMENTS:
+- Must-haves: {', '.join(str(x) for x in must_haves[:8])}
+- Keywords: {', '.join(str(x) for x in keywords[:15])}
+
+ALLOWED SKILLS/TOOLS (from analysis; do not add tools outside this list unless they already appear in the input resume):
+{', '.join(allowed_skills) if allowed_skills else 'N/A'}
+
+INPUT RESUME STRUCTURE (verbatim JSON, extracted from the resume text):
+{parsed_json}
+
+TAILORED SUMMARY (use as the summary base; you may tighten it):
+{tailored_summary}
+
+TAILORED KEY ACHIEVEMENTS (use as the achievements base; you may tighten them):
+{tailored_bullets_json}
+
+Rules:
+- Keep name/contact info and role history truthful; do not invent anything.
+- Prefer 2-3 sentence summary with 1 concrete metric/outcome when available.
+- Key Achievements: 3-5 bullets, outcome-driven, simple punctuation.
+- Skills: group into 3-6 categories, order categories by relevance to the job.
+- Experience: 2-5 bullets per role; outcome-driven; keep all numbers the same as input (no new numbers).
+- Projects: 1-2 bullets each if present; keep URLs if present.
+- Keep section names: summary, key_achievements, skills, experience, projects, education, certifications.
+- Output must be valid JSON only.
+
+Return JSON with this exact shape:
+{{
+  "summary": "string",
+  "key_achievements": ["...", "..."],
+  "skills": [{{"category": "Category", "items": ["...", "..."]}}],
+  "experience": [{{"title": "", "company": "", "location": "", "dates": "", "bullets": ["..."]}}],
+  "projects": [{{"name": "", "url": "", "bullets": ["..."]}}],
+  "education": [{{"degree": "", "school": "", "dates": ""}}],
+  "certifications": [{{"name": "", "issuer": "", "date": ""}}]
+}}
+"""
+
+    resp = await client.complete(prompt, system_prompt=system_prompt, json_mode=True)
+    if not resp or not getattr(resp, "ok", False) or not getattr(resp, "json_data", None):
+        return None
+    data = resp.json_data
+    if not isinstance(data, dict):
+        return None
+
+    # Post-validate: drop bullets that introduce numeric tokens not present in original resume_text
+    def _filter_bullets(bullets_any: Any) -> List[str]:
+        bullets_list = bullets_any if isinstance(bullets_any, list) else []
+        out: List[str] = []
+        for b in bullets_list[:6]:
+            bt = str(b or "").strip()
+            if not bt:
+                continue
+            new_nums = _extract_numeric_tokens(bt) - allowed_numbers
+            if new_nums:
+                continue
+            out.append(bt)
+        return out
+
+    cleaned: Dict[str, Any] = {}
+    if isinstance(data.get("summary"), str):
+        cleaned["summary"] = data.get("summary")
+    if isinstance(data.get("key_achievements"), list):
+        cleaned["key_achievements"] = _filter_bullets(data.get("key_achievements"))[:5]
+    if isinstance(data.get("skills"), list):
+        skills_out = []
+        for g in data.get("skills")[:8]:
+            if not isinstance(g, dict):
+                continue
+            cat = str(g.get("category") or "").strip()
+            items = [str(x or "").strip() for x in (g.get("items") or []) if str(x or "").strip()]
+            if not items:
+                continue
+            skills_out.append({"category": cat or None, "items": items[:12]})
+        cleaned["skills"] = skills_out
+    if isinstance(data.get("experience"), list):
+        exp_out = []
+        for e in data.get("experience")[:6]:
+            if not isinstance(e, dict):
+                continue
+            bullets = _filter_bullets(e.get("bullets"))
+            if not bullets:
+                continue
+            exp_out.append(
+                {
+                    "title": str(e.get("title") or ""),
+                    "company": str(e.get("company") or ""),
+                    "location": str(e.get("location") or ""),
+                    "dates": str(e.get("dates") or ""),
+                    "bullets": bullets[:5],
+                }
+            )
+        cleaned["experience"] = exp_out
+    if isinstance(data.get("projects"), list):
+        proj_out = []
+        for p in data.get("projects")[:6]:
+            if not isinstance(p, dict):
+                continue
+            bullets = _filter_bullets(p.get("bullets"))[:3]
+            proj_out.append(
+                {
+                    "name": str(p.get("name") or ""),
+                    "url": str(p.get("url") or ""),
+                    "bullets": bullets,
+                }
+            )
+        cleaned["projects"] = proj_out
+    if isinstance(data.get("education"), list):
+        edu_out = []
+        for e in data.get("education")[:6]:
+            if not isinstance(e, dict):
+                continue
+            edu_out.append(
+                {
+                    "degree": str(e.get("degree") or ""),
+                    "school": str(e.get("school") or ""),
+                    "dates": str(e.get("dates") or ""),
+                }
+            )
+        cleaned["education"] = edu_out
+    if isinstance(data.get("certifications"), list):
+        cert_out = []
+        for c in data.get("certifications")[:8]:
+            if not isinstance(c, dict):
+                continue
+            cert_out.append(
+                {
+                    "name": str(c.get("name") or ""),
+                    "issuer": str(c.get("issuer") or ""),
+                    "date": str(c.get("date") or ""),
+                }
+            )
+        cleaned["certifications"] = cert_out
+
+    return cleaned or None
 
 
 async def _generate_cover_note(

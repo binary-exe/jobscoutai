@@ -884,6 +884,7 @@ def generate_resume_docx(
     original_resume_text: Optional[str] = None,
     job_keywords: Optional[list[str]] = None,
     experience_override: Optional[list[Dict[str, Any]]] = None,
+    resume_structure_override: Optional[Dict[str, Any]] = None,
 ) -> BytesIO:
     """
     Generate a complete ATS-friendly tailored resume DOCX.
@@ -914,6 +915,9 @@ def generate_resume_docx(
     
     # Parse original resume if provided
     parsed = _parse_resume_into_structure(original_resume_text) if original_resume_text else {}
+    if isinstance(resume_structure_override, dict) and resume_structure_override:
+        # Allow a fully-structured resume override (AI-crafted). Keep it best-effort.
+        parsed = {**parsed, **resume_structure_override}
     
     # ==================== HEADER ====================
     # Name
@@ -990,9 +994,12 @@ def generate_resume_docx(
         doc.add_paragraph().paragraph_format.space_after = Pt(2)
     
     # ==================== KEY ACHIEVEMENTS (Tailored) ====================
-    if tailored_bullets:
+    # If a structured override includes its own achievements list, prefer it.
+    override_achievements = parsed.get("key_achievements")
+    key_achievements = override_achievements if isinstance(override_achievements, list) else tailored_bullets
+    if key_achievements:
         _add_section_header(doc, 'Key Achievements')
-        for bullet in tailored_bullets:
+        for bullet in key_achievements:
             bullet_text = bullet.get('text', '') if isinstance(bullet, dict) else str(bullet)
             if bullet_text:
                 _add_bullet_paragraph(doc, bullet_text)
