@@ -175,6 +175,14 @@ class Settings(BaseSettings):
     premium_ai_max_tokens_interview: int = 1200
     premium_ai_max_tokens_template: int = 900
 
+    # Apply Pack reviewer loop (premium-only; disabled by default)
+    apply_pack_review_enabled: bool = False
+    apply_pack_review_model: str = "gpt-4.1"
+    apply_pack_review_max_iters: int = 2
+    apply_pack_review_timeout_s: int = 20
+    apply_pack_review_max_tokens_review: int = 900
+    apply_pack_review_max_tokens_revise: int = 1400
+
     # Embeddings (pgvector personalization)
     embeddings_enabled: bool = False
     openai_embedding_model: str = "text-embedding-3-small"

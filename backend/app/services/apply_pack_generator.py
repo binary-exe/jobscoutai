@@ -221,11 +221,12 @@ Job must-haves: {', '.join(str(m) for m in job_must_haves)}
 Current bullets:
 {bullets_text}
 
-Return JSON array of rewritten bullets:
-[
-  {{"text": "Rewritten bullet point", "match_score": 85}},
-  ...
-]
+Return a JSON object with this shape:
+{
+  "bullets": [
+    {"text": "Rewritten bullet point", "match_score": 85}
+  ]
+}
 
 Each bullet should:
 - Keep original metrics/numbers
@@ -237,9 +238,13 @@ Each bullet should:
     response = await client.complete(prompt, system_prompt=system_prompt, json_mode=True)
     
     if response.ok and response.json_data:
-        bullets = response.json_data
-        if isinstance(bullets, list):
+        parsed = response.json_data
+        if isinstance(parsed, dict) and isinstance(parsed.get("bullets"), list):
+            bullets = parsed.get("bullets") or []
             return bullets[:5]
+        # Backwards compatibility if model returned a top-level array despite JSON mode constraints
+        if isinstance(parsed, list):
+            return parsed[:5]
     
     # Fallback: return original bullets with basic scores
     return [

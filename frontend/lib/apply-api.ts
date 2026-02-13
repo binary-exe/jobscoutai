@@ -178,12 +178,15 @@ export interface TrustReport {
   apply_link_warnings?: string[];
   domain_consistency_reasons?: string[];
   trust_score?: number;
+  trust_score_raw?: number;
+  trust_score_after_community?: number;
   verified_at?: string;
   confidence?: {
     scam?: number;
     ghost?: number;
     staleness?: number;
     domain?: number;
+    link?: number;
     overall?: number;
   };
   community?: {

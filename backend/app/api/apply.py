@@ -13,6 +13,7 @@ from fastapi import APIRouter, HTTPException, Depends, Header, Response, UploadF
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, HttpUrl
 
+from backend.app.core.config import get_settings
 from backend.app.core.database import db
 from backend.app.core.auth import get_current_user, AuthUser
 from backend.app.core.rate_limit import check_rate_limit, apply_pack_limiter, job_capture_limiter
@@ -23,6 +24,7 @@ from backend.app.services import resume_analyzer
 from backend.app.services import resume_parser
 from backend.app.services import job_analyzer
 from backend.app.services import apply_pack_generator
+from backend.app.services import apply_pack_review
 from backend.app.services import learning_summary
 
 router = APIRouter(prefix="/apply", tags=["apply"])
@@ -73,7 +75,11 @@ class TrustReportResponse(BaseModel):
     apply_link_cached: Optional[bool] = None
     apply_link_warnings: Optional[list[str]] = None
     domain_consistency_reasons: Optional[list[str]] = None
+    # Returned trust score is confidence-adjusted for UX (raw score stored in DB).
     trust_score: Optional[int] = None
+    # Debug fields (additive; safe for older clients to ignore)
+    trust_score_raw: Optional[int] = None
+    trust_score_after_community: Optional[int] = None
     verified_at: Optional[datetime] = None
     confidence: Optional[dict] = None
     community: Optional[dict[str, int]] = None
@@ -81,44 +87,83 @@ class TrustReportResponse(BaseModel):
     next_steps: Optional[list[str]] = None
 
 
-def _confidence_from_reasons(reasons: Optional[list[str]]) -> int:
-    """
-    Cheap confidence proxy: more independent signals => higher confidence.
-    Returns 0..100.
-    """
-    if not reasons:
-        return 25
-    # Down-weight generic "no obvious ..." sentences
-    meaningful = [
-        r for r in reasons
-        if r and "no obvious" not in r.lower() and "no posting date" not in r.lower()
-    ]
-    n = len(meaningful)
-    if n >= 5:
-        return 90
-    if n >= 3:
-        return 75
-    if n >= 1:
-        return 55
-    return 35
+def _clamp_int(x: float | int, lo: int = 0, hi: int = 100) -> int:
+    try:
+        return max(lo, min(hi, int(round(float(x)))))
+    except Exception:
+        return lo
 
 
-def _build_confidence(report: dict) -> dict:
+def _build_confidence(report: dict, *, ctx: dict) -> dict:
+    """
+    Confidence reflects signal coverage (what we were actually able to check),
+    not just how many reasons were generated.
+    """
+    desc_len = int(ctx.get("description_len") or 0)
+    has_desc = bool(ctx.get("has_description"))
+    has_html = bool(ctx.get("has_html"))
+    has_job_url = bool(ctx.get("has_job_url"))
+    has_posted_at = bool(ctx.get("has_posted_at"))
+    has_expires_at = bool(ctx.get("has_expires_at"))
+    has_apply_url = bool(ctx.get("has_apply_url"))
+    has_company_website = bool(ctx.get("has_company_website"))
+
+    apply_link_status = (report.get("apply_link_status") or "").lower()
+
+    # Scam risk uses description/html + contact signals; confidence improves with richer text/HTML.
+    scam = 90 if (has_html or desc_len >= 800) else 70 if (has_desc and desc_len >= 200) else 45 if has_job_url else 30
+
+    # Ghost likelihood uses posting age + requirement specificity; posting date is the best independent signal.
+    ghost = 90 if has_posted_at else 60 if (has_desc and desc_len >= 200) else 45 if has_job_url else 30
+
+    # Staleness uses posted/expires + page freshness; dates help most.
+    staleness = 90 if (has_posted_at or has_expires_at) else 60 if (has_desc and desc_len >= 200) else 45 if has_job_url else 30
+
+    # Domain consistency is only meaningful if we have at least two domains to compare.
+    if has_company_website and (has_apply_url or has_job_url):
+        domain = 90
+    elif has_company_website or has_apply_url or has_job_url:
+        domain = 55
+    else:
+        domain = 30
+
+    # Apply link confidence: highest if we could test a link; lower if no link exists.
+    if apply_link_status in ("valid", "broken"):
+        link = 90
+    elif apply_link_status == "missing":
+        link = 55 if (has_apply_url or has_job_url) else 30
+    else:
+        link = 45 if (has_apply_url or has_job_url) else 30
+
+    # Weighted overall aligned to trust-score weights
+    overall = (
+        scam * 0.35
+        + ghost * 0.25
+        + staleness * 0.20
+        + link * 0.10
+        + domain * 0.10
+    )
+
     return {
-        "scam": _confidence_from_reasons(report.get("scam_reasons")),
-        "ghost": _confidence_from_reasons(report.get("ghost_reasons")),
-        "staleness": _confidence_from_reasons(report.get("staleness_reasons")),
-        "domain": _confidence_from_reasons(report.get("domain_consistency_reasons")),
-        "overall": int(
-            (
-                _confidence_from_reasons(report.get("scam_reasons"))
-                + _confidence_from_reasons(report.get("ghost_reasons"))
-                + _confidence_from_reasons(report.get("staleness_reasons"))
-                + _confidence_from_reasons(report.get("domain_consistency_reasons"))
-            )
-            / 4
-        ),
+        "scam": _clamp_int(scam),
+        "ghost": _clamp_int(ghost),
+        "staleness": _clamp_int(staleness),
+        "domain": _clamp_int(domain),
+        "link": _clamp_int(link),
+        "overall": _clamp_int(overall),
     }
+
+
+def _confidence_adjust_trust_score(
+    score_after_community: Optional[int],
+    confidence_overall: Optional[int],
+) -> Optional[int]:
+    if score_after_community is None:
+        return None
+    conf = _clamp_int(confidence_overall or 0)
+    # Pull extremes toward neutral when confidence is low.
+    adjusted = 50 + (int(score_after_community) - 50) * (conf / 100.0)
+    return _clamp_int(adjusted)
 
 
 def _community_penalty(community: dict[str, int]) -> tuple[int, list[str]]:
@@ -807,7 +852,7 @@ async def generate_trust_report(
             community = await apply_storage.get_trust_report_feedback_summary(conn, job_target_id)
             penalty, community_reasons = _community_penalty(community)
             trust_score = existing.get("trust_score")
-            trust_score_adj = max(0, int(trust_score) - penalty) if trust_score is not None else None
+            trust_score_after_community = max(0, int(trust_score) - penalty) if trust_score is not None else None
             payload = {
                 "trust_report_id": str(existing["trust_report_id"]),
                 "scam_risk": existing["scam_risk"],
@@ -824,12 +869,29 @@ async def generate_trust_report(
                 "apply_link_cached": True,
                 "apply_link_warnings": link_warnings,
                 "domain_consistency_reasons": existing.get("domain_consistency_reasons"),
-                "trust_score": trust_score_adj,
+                "trust_score_raw": int(trust_score) if trust_score is not None else None,
+                "trust_score_after_community": trust_score_after_community,
+                "trust_score": trust_score_after_community,
             }
+            ctx = {
+                "has_description": bool(job_target.get("description_text")),
+                "description_len": len((job_target.get("description_text") or "").strip()),
+                "has_html": bool(job_target.get("html")),
+                "has_job_url": bool(job_target.get("job_url")),
+                "has_posted_at": bool(job_target.get("posted_at")),
+                "has_expires_at": bool(job_target.get("expires_at")),
+                "has_apply_url": bool(apply_url),
+                "has_company_website": bool(extracted_json.get("company_website")),
+            }
+            confidence = _build_confidence(payload, ctx=ctx)
+            payload["trust_score"] = _confidence_adjust_trust_score(
+                trust_score_after_community,
+                confidence.get("overall"),
+            )
             return TrustReportResponse(
                 **payload,
                 verified_at=existing.get("created_at"),
-                confidence=_build_confidence(payload),
+                confidence=confidence,
                 community=community,
                 community_reasons=community_reasons,
                 next_steps=_build_next_steps(payload),
@@ -901,7 +963,7 @@ async def generate_trust_report(
         community = await apply_storage.get_trust_report_feedback_summary(conn, job_target_id)
         penalty, community_reasons = _community_penalty(community)
         raw_score = trust_report.get("trust_score") or report_data.get("trust_score")
-        trust_score_adj = max(0, int(raw_score) - penalty) if raw_score is not None else None
+        trust_score_after_community = max(0, int(raw_score) - penalty) if raw_score is not None else None
 
         payload = {
             "trust_report_id": str(trust_report["trust_report_id"]),
@@ -919,13 +981,30 @@ async def generate_trust_report(
             "apply_link_cached": report_data.get("apply_link_cached", False),
             "apply_link_warnings": report_data.get("apply_link_warnings") or _link_warnings_from_url(apply_url),
             "domain_consistency_reasons": trust_report.get("domain_consistency_reasons") or report_data.get("domain_consistency_reasons"),
-            "trust_score": trust_score_adj,
+            "trust_score_raw": int(raw_score) if raw_score is not None else None,
+            "trust_score_after_community": trust_score_after_community,
+            "trust_score": trust_score_after_community,
         }
+        ctx = {
+            "has_description": bool(job_target.get("description_text")),
+            "description_len": len((job_target.get("description_text") or "").strip()),
+            "has_html": bool(job_target.get("html")),
+            "has_job_url": bool(job_target.get("job_url")),
+            "has_posted_at": bool(job_target.get("posted_at")),
+            "has_expires_at": bool(job_target.get("expires_at")),
+            "has_apply_url": bool(apply_url),
+            "has_company_website": bool(company_website),
+        }
+        confidence = _build_confidence(payload, ctx=ctx)
+        payload["trust_score"] = _confidence_adjust_trust_score(
+            trust_score_after_community,
+            confidence.get("overall"),
+        )
 
         return TrustReportResponse(
             **payload,
             verified_at=trust_report.get("created_at"),
-            confidence=_build_confidence(payload),
+            confidence=confidence,
             community=community,
             community_reasons=community_reasons,
             next_steps=_build_next_steps(payload),
@@ -1186,6 +1265,31 @@ async def generate_apply_pack(
             company_website=company_website,
             learning_context=learning_context,
         )
+
+        # Optional premium-only reviewer loop (advanced model reviews, cheap model revises)
+        if request.use_ai:
+            try:
+                settings = get_settings()
+                user_row = await apply_storage.get_user(conn, user_id)
+                job_text_for_review = (job_target.get("description_text") or request.job_text or "").strip()
+                pack_data = await apply_pack_review.review_and_refine_apply_pack(
+                    conn=conn,
+                    settings=settings,
+                    user_id=user_id,
+                    user_row=user_row,
+                    resume_hash=resume_hash,
+                    job_hash=job_hash,
+                    pack_hash=pack_hash,
+                    resume_text=request.resume_text,
+                    job_text=job_text_for_review,
+                    job_title=job_title,
+                    company_name=company_name,
+                    generator_model=settings.openai_model,
+                    pack_data=pack_data,
+                )
+            except Exception as e:
+                # Never fail apply pack generation due to reviewer loop
+                print(f"Warning: Apply Pack review loop failed: {e}")
         
         # Convert UUIDs if needed (asyncpg returns UUID objects, not strings)
         resume_id_val = resume["resume_id"]

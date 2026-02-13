@@ -347,12 +347,12 @@ def analyze_ghost_likelihood(
     # Check posting date (very old postings might be ghost jobs)
     if posted_at:
         age_days = (datetime.now(timezone.utc) - posted_at).days
-        if age_days > 90:
-            reasons.append(f"Job posted {age_days} days ago (may be stale or ghost)")
-            score += 10
-        elif age_days > 180:
+        if age_days > 180:
             reasons.append(f"Job posted {age_days} days ago (likely ghost or stale)")
             score += 20
+        elif age_days > 90:
+            reasons.append(f"Job posted {age_days} days ago (may be stale or ghost)")
+            score += 10
     
     # Determine likelihood
     if score >= 40:
