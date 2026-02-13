@@ -10,6 +10,7 @@ export function Header() {
   const pathname = usePathname();
   const [email, setEmail] = useState<string | null>(null);
   const [showDropdown, setShowDropdown] = useState(false);
+  const [loginUrl, setLoginUrl] = useState('/login');
   const dropdownRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
@@ -30,6 +31,16 @@ export function Header() {
     };
   }, []);
 
+  // Build login URL with current path as redirect.
+  // Do this in an effect so SSR + first client render match (prevents hydration #418/#422).
+  useEffect(() => {
+    const url =
+      pathname && pathname !== '/login' && pathname !== '/auth/callback'
+        ? `/login?next=${encodeURIComponent(pathname)}`
+        : '/login';
+    setLoginUrl(url);
+  }, [pathname]);
+
   // Close dropdown when clicking outside
   useEffect(() => {
     const handleClickOutside = (event: MouseEvent) => {
@@ -45,11 +56,6 @@ export function Header() {
     await supabase.auth.signOut();
     setShowDropdown(false);
   };
-
-  // Build login URL with current path as redirect
-  const loginUrl = pathname && pathname !== '/login' && pathname !== '/auth/callback'
-    ? `/login?next=${encodeURIComponent(pathname)}`
-    : '/login';
 
   return (
     <header className="sticky top-0 z-50 w-full border-b border-border/40 bg-background/80 backdrop-blur-xl supports-[backdrop-filter]:bg-background/60">
