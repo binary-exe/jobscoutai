@@ -433,6 +433,10 @@ export default function ApplyWorkspacePage() {
         setQuotaLoaded(true);
       }
     }
+    if (!q) {
+      setError('Unable to check Premium AI availability right now. Please refresh and try again.');
+      return;
+    }
     if (q && q.premium_ai_enabled === false) {
       setError('Interview Coach is not enabled on this server.');
       return;
@@ -478,6 +482,10 @@ export default function ApplyWorkspacePage() {
       } finally {
         setQuotaLoaded(true);
       }
+    }
+    if (!q) {
+      setError('Unable to check Premium AI availability right now. Please refresh and try again.');
+      return;
     }
     if (q && q.premium_ai_enabled === false) {
       setError('Premium AI templates are not enabled on this server.');
@@ -1406,12 +1414,14 @@ export default function ApplyWorkspacePage() {
                     <button
                       type="button"
                       onClick={handleGenerateInterviewCoach}
-                      disabled={isGeneratingInterviewCoach || !quotaLoaded || quota?.premium_ai_enabled === false}
+                      disabled={isGeneratingInterviewCoach || !quotaLoaded || !quota || quota.premium_ai_enabled === false}
                       className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                     >
                       {!quotaLoaded
                         ? 'Checking availability…'
-                        : quota?.premium_ai_enabled === false
+                        : !quota
+                          ? 'Unavailable right now'
+                          : quota.premium_ai_enabled === false
                           ? 'Not enabled on this server'
                           : isGeneratingInterviewCoach
                             ? 'Generating…'
@@ -1498,12 +1508,14 @@ export default function ApplyWorkspacePage() {
                       <button
                         type="button"
                         onClick={handleGenerateTemplate}
-                        disabled={isGeneratingTemplate || !quotaLoaded || quota?.premium_ai_enabled === false}
+                        disabled={isGeneratingTemplate || !quotaLoaded || !quota || quota.premium_ai_enabled === false}
                         className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
                       >
                         {!quotaLoaded
                           ? 'Checking availability…'
-                          : quota?.premium_ai_enabled === false
+                          : !quota
+                            ? 'Unavailable right now'
+                            : quota.premium_ai_enabled === false
                             ? 'Not enabled on this server'
                             : isGeneratingTemplate
                               ? 'Generating…'
