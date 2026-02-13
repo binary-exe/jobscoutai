@@ -6,6 +6,9 @@ import { BrowseSectionTracker } from '@/components/BrowseSectionTracker';
 import { ArrowRight, MapPin, Building2, Clock } from 'lucide-react';
 import { getJobs, formatRelativeTime, formatSalary, Job } from '@/lib/api';
 
+// Avoid build-time static generation: these pages fetch from API and timeout on Vercel
+export const dynamic = 'force-dynamic';
+
 interface PageProps {
   params: {
     role: string;
@@ -199,11 +202,4 @@ export default async function RemoteRoleJobsPage({ params }: PageProps) {
       <Footer />
     </>
   );
-}
-
-// Generate static params for common roles
-export async function generateStaticParams() {
-  return Object.keys(ROLE_MAPPINGS).map((role) => ({
-    role,
-  }));
 }
