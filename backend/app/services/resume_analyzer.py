@@ -10,6 +10,41 @@ import json
 from backend.app.core.config import get_settings
 
 
+_GENERIC_SKILL_TOKENS = {
+    "skill",
+    "skills",
+    "experience",
+    "professional",
+    "software",
+    "engineering",
+    "developer",
+    "development",
+    "technology",
+    "technologies",
+}
+
+
+def _clean_skills_list(skills: Any, max_items: int = 30) -> List[str]:
+    out: List[str] = []
+    seen = set()
+    for s in (skills or []):
+        t = str(s or "").strip()
+        if not t:
+            continue
+        tl = t.lower()
+        if tl in _GENERIC_SKILL_TOKENS:
+            continue
+        if len(t) < 2:
+            continue
+        if tl in seen:
+            continue
+        seen.add(tl)
+        out.append(t)
+        if len(out) >= max_items:
+            break
+    return out
+
+
 async def analyze_resume(resume_text: str, use_ai: bool = True) -> Dict[str, Any]:
     """
     Analyze resume and extract structured data.
@@ -73,8 +108,9 @@ Return JSON in this format:
         response = await client.complete(prompt, system_prompt=system_prompt, json_mode=True)
         
         if response.ok and response.json_data:
+            skills = _clean_skills_list(response.json_data.get("skills", []), 30)
             return {
-                "skills": response.json_data.get("skills", []),
+                "skills": skills,
                 "seniority": response.json_data.get("seniority", "mid"),
                 "bullets": response.json_data.get("bullets", []),
             }
@@ -134,7 +170,7 @@ def _extract_resume_heuristic(resume_text: str) -> Dict[str, Any]:
                 break
     
     return {
-        "skills": skills[:20],  # Limit to 20 skills
+        "skills": _clean_skills_list(skills[:50], 20),  # Limit to 20 skills
         "seniority": seniority,
         "bullets": bullets,
     }

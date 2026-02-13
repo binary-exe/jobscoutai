@@ -34,6 +34,81 @@ def _ensure_list(value: Any, max_items: int = None) -> List:
     return value
 
 
+_GENERIC_SKILL_TOKENS = {
+    "skill",
+    "skills",
+    "experience",
+    "professional",
+    "software",
+    "engineering",
+    "developer",
+    "development",
+    "technology",
+    "technologies",
+}
+
+
+def _clean_skills_list(skills: Any, max_items: int = 12) -> List[str]:
+    raw = _ensure_list(skills)
+    out: List[str] = []
+    seen = set()
+    for s in raw:
+        t = str(s or "").strip()
+        if not t:
+            continue
+        tl = t.lower()
+        if tl in _GENERIC_SKILL_TOKENS:
+            continue
+        if len(t) < 2:
+            continue
+        if tl in seen:
+            continue
+        seen.add(tl)
+        out.append(t)
+        if len(out) >= max_items:
+            break
+    return out
+
+
+def _fallback_skills_from_text(resume_text: str, max_items: int = 8) -> List[str]:
+    """
+    Lightweight, deterministic fallback for when resume analysis returns junk like ["skills"].
+    Keep it conservative (only well-known tech keywords).
+    """
+    text_lower = (resume_text or "").lower()
+    candidates = [
+        "Python",
+        "TypeScript",
+        "JavaScript",
+        "Node.js",
+        "React",
+        "FastAPI",
+        "Flask",
+        "Django",
+        "PostgreSQL",
+        "MySQL",
+        "Docker",
+        "Kubernetes",
+        "Terraform",
+        "AWS",
+        "GCP",
+        "Azure",
+        "LangChain",
+        "RAG",
+        "Pinecone",
+        "n8n",
+        "Zapier",
+        "GitHub Actions",
+    ]
+    out: List[str] = []
+    for c in candidates:
+        if c.lower() in text_lower:
+            out.append(c)
+        if len(out) >= max_items:
+            break
+    return out
+
+
 async def generate_apply_pack(
     resume_text: str,
     resume_analysis: Dict[str, Any],
@@ -87,8 +162,13 @@ async def generate_apply_pack(
         
         # Generate tailored summary (with learning context)
         summary = await _generate_summary(
-            client, resume_text, job_description, resume_analysis, job_analysis,
-            learning_context=learning_context
+            client,
+            resume_text,
+            job_description,
+            resume_analysis,
+            job_analysis,
+            job_title=job_title,
+            learning_context=learning_context,
         )
         
         # Generate tailored bullets (with learning context)
@@ -131,11 +211,13 @@ async def _generate_summary(
     job_description: str,
     resume_analysis: Dict,
     job_analysis: Dict,
+    job_title: Optional[str] = None,
     learning_context: Optional[Dict[str, Any]] = None,
 ) -> str:
     """Generate tailored professional summary."""
-    system_prompt = """You are a career coach helping job seekers tailor their resumes.
-Write concise, professional summaries that highlight relevant experience."""
+    system_prompt = """You are a meticulous ATS resume writer.
+Write concise, keyword-aligned summaries that remain truthful.
+Do not invent skills/tools/employers. Prefer plain ASCII punctuation."""
     
     # Build learning context string
     learning_str = ""
@@ -150,16 +232,19 @@ Write concise, professional summaries that highlight relevant experience."""
             if "skills_gap" in issues:
                 learning_str += "\nNote: Past applications were rejected due to skills gaps. Emphasize relevant skills and experience."
     
-    # Safely extract lists
-    skills = _ensure_list(resume_analysis.get('skills'), 10)
+    # Safely extract lists (and clean "skills"-placeholder junk)
+    skills = _clean_skills_list(resume_analysis.get("skills"), 10)
+    if not skills:
+        skills = _fallback_skills_from_text(resume_text, max_items=8)
     bullets = _ensure_list(resume_analysis.get('bullets'))
     must_haves = _ensure_list(job_analysis.get('must_haves'), 5)
     keywords = _ensure_list(job_analysis.get('keywords'), 10)
     
-    prompt = f"""Write a 2-3 sentence professional summary that matches this resume to this job.
+    prompt = f"""Write a 2-3 sentence ATS-friendly professional summary that matches this resume to this job.
 
 Resume highlights:
-- Skills: {', '.join(str(s) for s in skills)}
+- Skills: {', '.join(str(s) for s in skills) if skills else 'N/A'}
+- Target role: {job_title or 'N/A'}
 - Seniority: {resume_analysis.get('seniority', 'mid')}
 - Key achievements: {len(bullets)} quantified results
 
@@ -174,13 +259,30 @@ Write a summary that:
 3. Shows alignment with job requirements
 4. Is specific and avoids generic phrases
 5. Addresses any past feedback patterns mentioned above
+6. Uses simple punctuation (avoid fancy dashes/quotes)
+7. Avoids keyword stuffing; include only keywords that are true for the candidate
 
 Summary:"""
     
     response = await client.complete(prompt, system_prompt=system_prompt)
     if response.ok:
-        return response.content.strip()
-    return "Experienced professional with relevant skills and proven track record."
+        out = (response.content or "").strip()
+        out_l = out.lower()
+        # Guardrail against placeholders/generic output that requires manual edits.
+        if (
+            out
+            and "expertise in skills" not in out_l
+            and not out_l.endswith("in skills.")
+            and not out_l.startswith("experienced professional with relevant skills")
+        ):
+            return out
+
+    seniority = str(resume_analysis.get("seniority", "professional") or "professional").strip()
+    top = skills[:4]
+    role = (job_title or "professional").strip()
+    if top:
+        return f"{seniority.capitalize()} {role} with expertise in {', '.join(top)} and a track record of delivering measurable outcomes."
+    return f"{seniority.capitalize()} {role} with a track record of delivering measurable outcomes aligned to the role requirements."
 
 
 async def _generate_bullets(
@@ -190,8 +292,10 @@ async def _generate_bullets(
     learning_context: Optional[Dict[str, Any]] = None,
 ) -> List[Dict[str, Any]]:
     """Generate tailored resume bullets."""
-    system_prompt = """You are a resume writer. Rewrite achievement bullets to match job requirements.
-Include quantified metrics and impact."""
+    system_prompt = """You are a meticulous ATS resume bullet writer.
+Rewrite bullets to match job requirements while staying truthful.
+Do not add skills/tools not supported by the original bullets or resume analysis.
+Prefer simple punctuation (no fancy dashes/quotes)."""
     
     existing_bullets = _ensure_list(resume_analysis.get('bullets'), 5)
     if not existing_bullets:
@@ -302,7 +406,7 @@ async def _generate_cover_note(
             learning_str += f"\nPast successful applications emphasized: {', '.join(learning_context.get('positive_signals', [])[:3])}. "
             learning_str += "Consider highlighting similar strengths."
     
-    resume_skills = _ensure_list(resume_analysis.get('skills'), 10)
+    resume_skills = _clean_skills_list(resume_analysis.get("skills"), 10)
     
     prompt = f"""Write a professional, hyper-personalized cover letter (3-5 short paragraphs) for this job application.
 
@@ -315,7 +419,7 @@ JOB DETAILS:
 - Role Expectations: {rubric[:300] if rubric else 'See job description'}
 
 MY BACKGROUND:
-- Skills: {', '.join(str(s) for s in resume_skills)}
+- Skills: {', '.join(str(s) for s in resume_skills) if resume_skills else 'N/A'}
 - Seniority Level: {resume_analysis.get('seniority', 'mid')}
 - Top Achievements:
 {achievements_text if achievements_text else '- See resume for details'}
@@ -384,7 +488,7 @@ def _generate_basic_pack(
     company_name: Optional[str] = None,
 ) -> Dict[str, Any]:
     """Generate basic pack without AI."""
-    skills = _ensure_list(resume_analysis.get('skills'), 10)
+    skills = _clean_skills_list(resume_analysis.get("skills"), 10)
     bullets = _ensure_list(resume_analysis.get('bullets'), 3)
     
     skills_str = ', '.join(str(s) for s in skills[:5]) if skills else 'relevant technologies'

@@ -1509,7 +1509,7 @@ async def export_apply_pack_docx(
         # Get apply pack
         apply_pack = await conn.fetchrow(
             """
-            SELECT ap.*, rv.resume_text, jt.title, jt.company
+            SELECT ap.*, rv.resume_text, jt.title, jt.company, jt.keywords, jt.must_haves
             FROM apply_packs ap
             LEFT JOIN resume_versions rv ON ap.resume_id = rv.resume_id
             LEFT JOIN job_targets jt ON ap.job_target_id = jt.job_target_id
@@ -1556,10 +1556,21 @@ async def export_apply_pack_docx(
                     applicant_linkedin = contact.get('url', contact.get('value'))
             
             if format == "resume":
+                # Prefer keywords from the stored job target; fall back to any computed checklist.
+                job_keywords = []
+                try:
+                    if apply_pack.get("keywords"):
+                        job_keywords.extend(list(apply_pack.get("keywords") or []))
+                    if apply_pack.get("must_haves"):
+                        job_keywords.extend(list(apply_pack.get("must_haves") or []))
+                except Exception:
+                    job_keywords = []
+
                 buffer = docx_generator.generate_resume_docx(
                     tailored_summary=apply_pack.get("tailored_summary", ""),
                     tailored_bullets=tailored_bullets,
                     original_resume_text=resume_text,
+                    job_keywords=job_keywords or None,
                 )
                 filename = "tailored_resume.docx"
                 media_type = "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
