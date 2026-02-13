@@ -326,11 +326,11 @@ Current bullets:
 {bullets_text}
 
 Return a JSON object with this shape:
-{
+{{
   "bullets": [
-    {"text": "Rewritten bullet point", "match_score": 85}
+    {{"text": "Rewritten bullet point", "match_score": 85}}
   ]
-}
+}}
 
 Each bullet should:
 - Keep original metrics/numbers
