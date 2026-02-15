@@ -743,8 +743,8 @@ def _setup_resume_styles(doc: "Document") -> None:
         s_sec.font.size = Pt(11)
         s_sec.font.bold = True
         s_sec.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
-        s_sec.paragraph_format.space_before = Pt(12)
-        s_sec.paragraph_format.space_after = Pt(4)
+        s_sec.paragraph_format.space_before = Pt(10)
+        s_sec.paragraph_format.space_after = Pt(2)
     except Exception:
         pass
 
@@ -757,7 +757,7 @@ def _setup_resume_styles(doc: "Document") -> None:
         s_body.font.name = "Calibri"
         s_body.font.size = Pt(10.5)
         s_body.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
-        s_body.paragraph_format.space_after = Pt(3)
+        s_body.paragraph_format.space_after = Pt(2)
         s_body.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
     except Exception:
         pass
@@ -773,7 +773,7 @@ def _setup_resume_styles(doc: "Document") -> None:
         s_b.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
         pf = s_b.paragraph_format
         pf.space_before = Pt(0)
-        pf.space_after = Pt(2)
+        pf.space_after = Pt(1)
         pf.line_spacing_rule = WD_LINE_SPACING.SINGLE
         pf.left_indent = Inches(0.30)
         pf.first_line_indent = Inches(-0.15)
@@ -789,8 +789,8 @@ def _setup_resume_styles(doc: "Document") -> None:
         s_role.font.name = "Calibri"
         s_role.font.size = Pt(11)
         s_role.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
-        s_role.paragraph_format.space_before = Pt(8)
-        s_role.paragraph_format.space_after = Pt(2)
+        s_role.paragraph_format.space_before = Pt(6)
+        s_role.paragraph_format.space_after = Pt(1)
     except Exception:
         pass
 
@@ -911,15 +911,28 @@ def _add_section_header(doc, title: str):
         para = doc.add_paragraph(style="ResumeSection")
     except Exception:
         para = doc.add_paragraph()
-    para.paragraph_format.space_before = Pt(14)
-    para.paragraph_format.space_after = Pt(6)
-    
+    para.paragraph_format.space_before = Pt(10)
+    para.paragraph_format.space_after = Pt(2)
+
     run = para.add_run(_clean_docx_text(title).upper())
     run.bold = True
     run.font.size = Pt(11)
-    # ATS-minimal mode: no colors/borders/graphics
     try:
-        run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
+        run.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
+    except Exception:
+        pass
+
+    # Subtle rule under section title (ATS-safe, still plain text)
+    try:
+        pPr = para._p.get_or_add_pPr()
+        pBdr = OxmlElement('w:pBdr')
+        bottom = OxmlElement('w:bottom')
+        bottom.set(qn('w:val'), 'single')
+        bottom.set(qn('w:sz'), '4')
+        bottom.set(qn('w:space'), '1')
+        bottom.set(qn('w:color'), 'B0B0B0')
+        pBdr.append(bottom)
+        pPr.append(pBdr)
     except Exception:
         pass
 

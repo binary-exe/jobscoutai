@@ -210,6 +210,7 @@ async def generate_apply_pack(
             resume_analysis=resume_analysis,
             job_analysis=job_analysis,
             job_title=job_title,
+            job_description=job_target.get("description_text", request.job_text or ""),
             tailored_summary=summary,
             tailored_bullets=bullets,
         )
@@ -436,7 +437,7 @@ async def _generate_optimized_experience(
     must_haves = _ensure_list(job_analysis.get("must_haves"), 10)
     all_terms = [str(x) for x in (must_haves + job_keywords) if str(x or "").strip()]
 
-    # Pick up to 3 most relevant roles to optimize (cost guardrail)
+    # Pick up to 4 most relevant roles to optimize (cost guardrail)
     ranked = sorted(experience, key=lambda e: _score_experience_relevance(e if isinstance(e, dict) else {}, all_terms), reverse=True)
     selected = []
     for e in ranked:
@@ -454,7 +455,7 @@ async def _generate_optimized_experience(
                 "bullets": [str(b) for b in bullets[:6] if str(b or "").strip()],
             }
         )
-        if len(selected) >= 3:
+        if len(selected) >= 4:
             break
     if not selected:
         return None
@@ -487,7 +488,8 @@ Rules:
 - Preserve all numbers/metrics exactly; do not add new metrics.
 - Do NOT add new tools/skills not already present in the input bullets or allowed skills/tools list.
 - Use past tense, active voice, and simple punctuation.
-- 2-5 bullets per role; you may merge/split bullets only if it does not change meaning.
+- 3-6 bullets per role; you may merge/split bullets only if it does not change meaning.
+- Each role must include at least 2 bullets that directly map to job must-haves/keywords (where applicable).
 - Output must be valid JSON only.
 
 Return JSON with this exact shape:
@@ -511,7 +513,7 @@ Return JSON with this exact shape:
     if not isinstance(data, dict) or not isinstance(data.get("experience"), list):
         return None
     out: List[Dict[str, Any]] = []
-    for e in data.get("experience", [])[:3]:
+    for e in data.get("experience", [])[:4]:
         if not isinstance(e, dict):
             continue
         bullets = e.get("bullets")
@@ -530,7 +532,7 @@ Return JSON with this exact shape:
                 "company": str(e.get("company") or ""),
                 "location": str(e.get("location") or ""),
                 "dates": str(e.get("dates") or ""),
-                "bullets": clean_bullets[:5],
+                "bullets": clean_bullets[:6],
             }
         )
     return out or None
@@ -556,6 +558,7 @@ async def _generate_optimized_resume_structure(
     resume_analysis: Dict[str, Any],
     job_analysis: Dict[str, Any],
     job_title: Optional[str],
+    job_description: str,
     tailored_summary: str,
     tailored_bullets: List[Dict[str, Any]],
 ) -> Optional[Dict[str, Any]]:
@@ -597,6 +600,7 @@ TARGET ROLE:
 JOB REQUIREMENTS:
 - Must-haves: {', '.join(str(x) for x in must_haves[:8])}
 - Keywords: {', '.join(str(x) for x in keywords[:15])}
+ - Job phrasing (verbatim excerpt, use for tone/wording only): {(job_description or '')[:700]}
 
 ALLOWED SKILLS/TOOLS (from analysis; do not add tools outside this list unless they already appear in the input resume):
 {', '.join(allowed_skills) if allowed_skills else 'N/A'}
@@ -615,7 +619,8 @@ Rules:
 - Prefer 2-3 sentence summary with 1 concrete metric/outcome when available.
 - Key Achievements: 3-5 bullets, outcome-driven, simple punctuation.
 - Skills: group into 3-6 categories, order categories by relevance to the job.
-- Experience: 2-5 bullets per role; outcome-driven; keep all numbers the same as input (no new numbers).
+- Experience: 4-6 bullets per role; outcome-driven; keep all numbers the same as input (no new numbers).
+- Each role must include 1-2 bullets using job-specific phrasing from the job description excerpt (without inventing facts).
 - Projects: 1-2 bullets each if present; keep URLs if present.
 - Keep section names: summary, key_achievements, skills, experience, projects, education, certifications.
 - Output must be valid JSON only.
@@ -643,7 +648,7 @@ Return JSON with this exact shape:
     def _filter_bullets(bullets_any: Any) -> List[str]:
         bullets_list = bullets_any if isinstance(bullets_any, list) else []
         out: List[str] = []
-        for b in bullets_list[:6]:
+        for b in bullets_list[:8]:
             bt = str(b or "").strip()
             if not bt:
                 continue
@@ -683,7 +688,7 @@ Return JSON with this exact shape:
                     "company": str(e.get("company") or ""),
                     "location": str(e.get("location") or ""),
                     "dates": str(e.get("dates") or ""),
-                    "bullets": bullets[:5],
+                    "bullets": bullets[:6],
                 }
             )
         cleaned["experience"] = exp_out
