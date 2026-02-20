@@ -1,3 +1,4 @@
+import Link from 'next/link';
 import { Heart } from 'lucide-react';
 
 export function Footer() {
@@ -10,13 +11,22 @@ export function Footer() {
             <Heart className="inline h-3 w-3 text-red-500" />{' '}
             for remote workers everywhere
           </p>
-          <div className="flex items-center gap-4 text-sm text-muted-foreground">
-            <a href="#" className="hover:text-foreground transition-colors">
-              Privacy
-            </a>
-            <a href="#" className="hover:text-foreground transition-colors">
+          <div className="flex flex-wrap items-center justify-center gap-x-4 gap-y-1 text-sm text-muted-foreground">
+            <Link href="/pricing" className="hover:text-foreground transition-colors">
+              Pricing
+            </Link>
+            <Link href="/terms" className="hover:text-foreground transition-colors">
               Terms
-            </a>
+            </Link>
+            <Link href="/privacy" className="hover:text-foreground transition-colors">
+              Privacy
+            </Link>
+            <Link href="/refunds" className="hover:text-foreground transition-colors">
+              Refunds
+            </Link>
+            <Link href="/contact" className="hover:text-foreground transition-colors">
+              Contact
+            </Link>
             <a 
               href="https://producthunt.com/products/jobscout"
               target="_blank"
@@ -27,6 +37,9 @@ export function Footer() {
             </a>
           </div>
         </div>
+        <p className="mt-3 text-center text-xs text-muted-foreground">
+          Payments powered by Paddle.
+        </p>
       </div>
     </footer>
   );

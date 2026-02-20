@@ -1,17 +1,27 @@
 'use client';
 
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { Check, Sparkles, Zap, Crown } from 'lucide-react';
 import Link from 'next/link';
 import { trackUpgradePromptViewed, trackUpgradeClicked } from '@/lib/analytics';
+import { SUPPORT_EMAIL } from '@/lib/legal';
 
 export default function PricingPage() {
   // Track pricing page view
   useEffect(() => {
     trackUpgradePromptViewed('pricing_page');
   }, []);
+
+  const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly');
+  const isAnnual = billingCycle === 'annual';
+  const proPrice = isAnnual ? 299 : 29;
+  const proPeriod = isAnnual ? 'per year' : 'per month';
+  const proPlanKey = isAnnual ? 'annual_pro' : 'monthly_pro';
+  const powerPrice = isAnnual ? 499 : 49;
+  const powerPeriod = isAnnual ? 'per year' : 'per month';
+  const powerPlanKey = isAnnual ? 'annual_power' : 'monthly_power';
 
   return (
     <>
@@ -28,18 +38,45 @@ export default function PricingPage() {
               Choose Your Plan
             </h1>
             <p className="text-muted-foreground max-w-2xl mx-auto">
-              Start with a free trial, upgrade when you need more. All plans include Trust Reports and job browsing.
+              JobScoutAI helps you land remote jobs with AI-tailored resumes and cover letters, application tracking, and trust/scam analysis so you can apply with confidence. Start with a free tier, upgrade when you need more. All plans include Trust Reports and job browsing.
             </p>
             <p className="mt-2 text-sm text-muted-foreground">
               <strong>1 Apply Pack</strong> = tailored cover letter + resume tweaks + trust report + saved to tracker
             </p>
+            <p className="mt-4 text-sm text-muted-foreground max-w-xl mx-auto">
+              Paid plans are <strong>billed monthly or annually</strong>. Subscriptions <strong>renew automatically until you cancel</strong>. You may <strong>cancel anytime</strong>; cancellation stops future charges.
+            </p>
+            <div className="mt-6 inline-flex items-center rounded-full border border-border bg-card p-1">
+              <button
+                type="button"
+                onClick={() => setBillingCycle('monthly')}
+                className={`rounded-full px-4 py-1 text-sm font-medium transition-colors ${
+                  billingCycle === 'monthly'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Monthly
+              </button>
+              <button
+                type="button"
+                onClick={() => setBillingCycle('annual')}
+                className={`rounded-full px-4 py-1 text-sm font-medium transition-colors ${
+                  billingCycle === 'annual'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Annual
+              </button>
+            </div>
           </div>
 
           <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
             {/* Free Plan */}
             <div className="rounded-xl border border-border bg-card p-6">
               <h3 className="text-xl font-bold mb-2">Free</h3>
-              <p className="text-3xl font-bold mb-1">€0</p>
+              <p className="text-3xl font-bold mb-1">$0</p>
               <p className="text-sm text-muted-foreground mb-6">Forever</p>
               
               <ul className="space-y-3 mb-8 text-sm">
@@ -53,11 +90,11 @@ export default function PricingPage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>Track 5 applications</span>
+                  <span>Limited application tracker</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>Copy outputs</span>
+                  <span>DOCX exports (up to 6 / month)</span>
                 </li>
               </ul>
               
@@ -69,7 +106,41 @@ export default function PricingPage() {
               </Link>
             </div>
 
-            {/* Pro Plan */}
+            {/* Sprint Weekly */}
+            <div className="rounded-xl border border-border bg-card p-6">
+              <h3 className="text-xl font-bold mb-2">Sprint Weekly</h3>
+              <p className="text-3xl font-bold mb-1">$7</p>
+              <p className="text-sm text-muted-foreground mb-6">per week</p>
+              
+              <ul className="space-y-3 mb-8 text-sm">
+                <li className="flex items-start gap-2">
+                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                  <span><strong>30</strong> Apply Packs / week</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                  <span>Trust Report included</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                  <span>Track up to <strong>30</strong> active applications</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                  <span>DOCX export</span>
+                </li>
+              </ul>
+              
+              <Link
+                href="/login?next=/account?plan=weekly_sprint"
+                onClick={() => trackUpgradeClicked('weekly_sprint', 'pricing_page')}
+                className="block w-full text-center rounded-lg border border-primary text-primary px-4 py-2 text-sm font-medium hover:bg-primary/10 transition-colors"
+              >
+                Start Sprint Plan
+              </Link>
+            </div>
+
+            {/* Pro */}
             <div className="rounded-xl border-2 border-primary bg-card p-6 relative">
               <div className="absolute -top-3 left-1/2 -translate-x-1/2">
                 <span className="bg-primary text-primary-foreground px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1">
@@ -79,13 +150,13 @@ export default function PricingPage() {
               </div>
               
               <h3 className="text-xl font-bold mb-2">Pro</h3>
-              <p className="text-3xl font-bold mb-1">€9</p>
-              <p className="text-sm text-muted-foreground mb-6">per month</p>
+              <p className="text-3xl font-bold mb-1">${proPrice}</p>
+              <p className="text-sm text-muted-foreground mb-6">{proPeriod}</p>
               
               <ul className="space-y-3 mb-8 text-sm">
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span><strong>30</strong> Apply Packs / month</span>
+                  <span><strong>150</strong> Apply Packs / month</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
@@ -93,24 +164,30 @@ export default function PricingPage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span><strong>Unlimited</strong> tracker</span>
+                  <span>Track up to <strong>150</strong> active applications</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
                   <span>DOCX export</span>
                 </li>
+                {isAnnual && (
+                  <li className="flex items-start gap-2">
+                    <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                    <span>$49 savings vs monthly</span>
+                  </li>
+                )}
               </ul>
               
               <Link
-                href="/login?next=/account"
-                onClick={() => trackUpgradeClicked('pro', 'pricing_page')}
+                href={`/login?next=/account?plan=${proPlanKey}`}
+                onClick={() => trackUpgradeClicked(proPlanKey, 'pricing_page')}
                 className="block w-full text-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
               >
-                Upgrade to Pro
+                Choose Pro
               </Link>
             </div>
 
-            {/* Pro+ Plan */}
+            {/* Power */}
             <div className="rounded-xl border border-border bg-card p-6 relative">
               <div className="absolute -top-3 left-1/2 -translate-x-1/2">
                 <span className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1">
@@ -119,18 +196,22 @@ export default function PricingPage() {
                 </span>
               </div>
               
-              <h3 className="text-xl font-bold mb-2">Pro+</h3>
-              <p className="text-3xl font-bold mb-1">€19</p>
-              <p className="text-sm text-muted-foreground mb-6">per month</p>
+              <h3 className="text-xl font-bold mb-2">Power</h3>
+              <p className="text-3xl font-bold mb-1">${powerPrice}</p>
+              <p className="text-sm text-muted-foreground mb-6">{powerPeriod}</p>
               
               <ul className="space-y-3 mb-8 text-sm">
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span><strong>100</strong> Apply Packs / month</span>
+                  <span><strong>300</strong> Apply Packs / month</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
                   <span>Everything in Pro</span>
+                </li>
+                <li className="flex items-start gap-2">
+                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                  <span>Track up to <strong>300</strong> active applications</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
@@ -140,56 +221,23 @@ export default function PricingPage() {
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
                   <span>Advanced analytics</span>
                 </li>
+                {isAnnual && (
+                  <li className="flex items-start gap-2">
+                    <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                    <span>$89 savings vs monthly</span>
+                  </li>
+                )}
               </ul>
               
               <Link
-                href="/login?next=/account"
-                onClick={() => trackUpgradeClicked('pro_plus', 'pricing_page')}
+                href={`/login?next=/account?plan=${powerPlanKey}`}
+                onClick={() => trackUpgradeClicked(powerPlanKey, 'pricing_page')}
                 className="block w-full text-center rounded-lg border border-primary text-primary px-4 py-2 text-sm font-medium hover:bg-primary/10 transition-colors"
               >
-                Upgrade to Pro+
+                Choose Power
               </Link>
             </div>
 
-            {/* Annual Plan */}
-            <div className="rounded-xl border border-green-500/50 bg-green-500/5 p-6 relative">
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                <span className="bg-green-500 text-white px-3 py-1 rounded-full text-xs font-medium">
-                  Save 27%
-                </span>
-              </div>
-              
-              <h3 className="text-xl font-bold mb-2">Pro Annual</h3>
-              <p className="text-3xl font-bold mb-1">€79</p>
-              <p className="text-sm text-muted-foreground mb-6">per year</p>
-              
-              <ul className="space-y-3 mb-8 text-sm">
-                <li className="flex items-start gap-2">
-                  <Check className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
-                  <span><strong>30</strong> Apply Packs / month</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Check className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
-                  <span>All Pro features</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Check className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
-                  <span>€29 savings vs monthly</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Check className="h-4 w-4 text-green-500 shrink-0 mt-0.5" />
-                  <span>Lock in current price</span>
-                </li>
-              </ul>
-              
-              <Link
-                href="/login?next=/account"
-                onClick={() => trackUpgradeClicked('annual', 'pricing_page')}
-                className="block w-full text-center rounded-lg bg-green-500 px-4 py-2 text-sm font-medium text-white hover:bg-green-600 transition-colors"
-              >
-                Get Annual Plan
-              </Link>
-            </div>
           </div>
 
           {/* Pack Top-ups */}
@@ -200,9 +248,9 @@ export default function PricingPage() {
                 Add extra Apply Packs anytime without changing your plan.
               </p>
               <div className="flex items-center justify-center gap-4">
-                <span className="text-2xl font-bold">+25 packs</span>
+                <span className="text-2xl font-bold">+20 packs</span>
                 <span className="text-muted-foreground">for</span>
-                <span className="text-2xl font-bold text-primary">€5</span>
+                <span className="text-2xl font-bold text-primary">$10</span>
               </div>
               <p className="text-xs text-muted-foreground mt-2">One-time purchase, never expires</p>
             </div>
@@ -238,7 +286,7 @@ export default function PricingPage() {
 
           <div className="mt-12 text-center">
             <p className="text-sm text-muted-foreground">
-              Questions? Contact us at support@jobscoutai.com
+              Questions? Contact us at <a href={`mailto:${SUPPORT_EMAIL}`} className="text-primary underline">{SUPPORT_EMAIL}</a>
             </p>
           </div>
         </div>
