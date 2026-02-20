@@ -26,17 +26,7 @@ def _now_utc() -> datetime:
 
 
 def _is_paid_user(user: Optional[Dict[str, Any]]) -> bool:
-    if not user:
-        return False
-    plan = (user.get("plan") or "free").strip().lower()
-    subscription_status = (user.get("subscription_status") or None)
-    paid_plans = ("pro", "pro_plus", "annual", "paid")  # legacy paid supported
-    if plan not in paid_plans:
-        return False
-    # Mirror quota logic: treat cancelled/expired as free.
-    if subscription_status not in ("active", "past_due", None):
-        return False
-    return True
+    return apply_storage.is_paid_user(user)
 
 
 async def _get_client(*, api_key: str, model: str, max_tokens: int, temperature: float):
@@ -95,9 +85,9 @@ async def review_and_refine_apply_pack(
     if not _is_paid_user(user_row):
         return pack_data
 
-    review_model = str(getattr(settings, "apply_pack_review_model", "gpt-4.1") or "gpt-4.1")
+    review_model = str(getattr(settings, "apply_pack_review_model", "gpt-4.1-mini") or "gpt-4.1-mini")
     max_iters = int(getattr(settings, "apply_pack_review_max_iters", 2) or 2)
-    max_iters = max(1, min(3, max_iters))  # hard safety cap
+    max_iters = max(1, min(2, max_iters))  # hard safety cap (forced to 2)
 
     timeout_s = int(getattr(settings, "apply_pack_review_timeout_s", 20) or 20)
     max_tokens_review = int(getattr(settings, "apply_pack_review_max_tokens_review", 900) or 900)
@@ -143,6 +133,7 @@ async def review_and_refine_apply_pack(
     current = dict(pack_data or {})
     last_review: Dict[str, Any] = {}
     iter_count = 0
+    review_used = False
 
     for _i in range(max_iters):
         prompt = f"""
@@ -198,6 +189,7 @@ Rules:
             break
 
         tokens_used_total += int(getattr(resp, "tokens_used", 0) or 0)
+        review_used = True
         review_json = resp.json_data if (resp and resp.json_data and isinstance(resp.json_data, dict)) else None
         if not review_json:
             # Can't parse reviewer output: stop to avoid runaway spend.
@@ -271,6 +263,7 @@ Rules:
     except Exception:
         pass
 
+    current["_review_used"] = review_used
     return current
 
 

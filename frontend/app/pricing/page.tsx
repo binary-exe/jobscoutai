@@ -3,7 +3,7 @@
 import { useEffect, useState } from 'react';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
-import { Check, Sparkles, Zap, Crown } from 'lucide-react';
+import { Check, Sparkles, Zap } from 'lucide-react';
 import Link from 'next/link';
 import { trackUpgradePromptViewed, trackUpgradeClicked } from '@/lib/analytics';
 import { SUPPORT_EMAIL } from '@/lib/legal';
@@ -14,14 +14,20 @@ export default function PricingPage() {
     trackUpgradePromptViewed('pricing_page');
   }, []);
 
-  const [billingCycle, setBillingCycle] = useState<'monthly' | 'annual'>('monthly');
-  const isAnnual = billingCycle === 'annual';
-  const proPrice = isAnnual ? 299 : 29;
-  const proPeriod = isAnnual ? 'per year' : 'per month';
-  const proPlanKey = isAnnual ? 'annual_pro' : 'monthly_pro';
-  const powerPrice = isAnnual ? 499 : 49;
-  const powerPeriod = isAnnual ? 'per year' : 'per month';
-  const powerPlanKey = isAnnual ? 'annual_power' : 'monthly_power';
+  const [billingCycle, setBillingCycle] = useState<'weekly' | 'monthly'>('monthly');
+  const isWeekly = billingCycle === 'weekly';
+
+  const standardPrice = isWeekly ? 4 : 19;
+  const standardPeriod = isWeekly ? 'per week' : 'per month';
+  const standardPacks = isWeekly ? 20 : 120;
+  const standardTrackerCap = standardPacks;
+  const standardPlanKey = isWeekly ? 'weekly_standard' : 'monthly_standard';
+
+  const proPrice = isWeekly ? 9 : 39;
+  const proPeriod = isWeekly ? 'per week' : 'per month';
+  const proPacks = isWeekly ? 50 : 250;
+  const proTrackerCap = proPacks;
+  const proPlanKey = isWeekly ? 'weekly_pro' : 'monthly_pro';
 
   return (
     <>
@@ -44,9 +50,20 @@ export default function PricingPage() {
               <strong>1 Apply Pack</strong> = tailored cover letter + resume tweaks + trust report + saved to tracker
             </p>
             <p className="mt-4 text-sm text-muted-foreground max-w-xl mx-auto">
-              Paid plans are <strong>billed monthly or annually</strong>. Subscriptions <strong>renew automatically until you cancel</strong>. You may <strong>cancel anytime</strong>; cancellation stops future charges.
+              Paid plans are <strong>billed weekly or monthly</strong>. Subscriptions <strong>renew automatically until you cancel</strong>. You may <strong>cancel anytime</strong>; cancellation stops future charges.
             </p>
             <div className="mt-6 inline-flex items-center rounded-full border border-border bg-card p-1">
+              <button
+                type="button"
+                onClick={() => setBillingCycle('weekly')}
+                className={`rounded-full px-4 py-1 text-sm font-medium transition-colors ${
+                  billingCycle === 'weekly'
+                    ? 'bg-primary text-primary-foreground'
+                    : 'text-muted-foreground hover:text-foreground'
+                }`}
+              >
+                Weekly
+              </button>
               <button
                 type="button"
                 onClick={() => setBillingCycle('monthly')}
@@ -58,21 +75,10 @@ export default function PricingPage() {
               >
                 Monthly
               </button>
-              <button
-                type="button"
-                onClick={() => setBillingCycle('annual')}
-                className={`rounded-full px-4 py-1 text-sm font-medium transition-colors ${
-                  billingCycle === 'annual'
-                    ? 'bg-primary text-primary-foreground'
-                    : 'text-muted-foreground hover:text-foreground'
-                }`}
-              >
-                Annual
-              </button>
             </div>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6 max-w-6xl mx-auto">
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
             {/* Free Plan */}
             <div className="rounded-xl border border-border bg-card p-6">
               <h3 className="text-xl font-bold mb-2">Free</h3>
@@ -106,16 +112,18 @@ export default function PricingPage() {
               </Link>
             </div>
 
-            {/* Sprint Weekly */}
+            {/* Standard */}
             <div className="rounded-xl border border-border bg-card p-6">
-              <h3 className="text-xl font-bold mb-2">Sprint Weekly</h3>
-              <p className="text-3xl font-bold mb-1">$7</p>
-              <p className="text-sm text-muted-foreground mb-6">per week</p>
-              
+              <h3 className="text-xl font-bold mb-2">Standard</h3>
+              <p className="text-3xl font-bold mb-1">${standardPrice}</p>
+              <p className="text-sm text-muted-foreground mb-6">{standardPeriod}</p>
+
               <ul className="space-y-3 mb-8 text-sm">
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span><strong>30</strong> Apply Packs / week</span>
+                  <span>
+                    <strong>{standardPacks}</strong> Apply Packs / {isWeekly ? 'week' : 'month'}
+                  </span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
@@ -123,20 +131,22 @@ export default function PricingPage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>Track up to <strong>30</strong> active applications</span>
+                  <span>
+                    Track up to <strong>{standardTrackerCap}</strong> active applications
+                  </span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
                   <span>DOCX export</span>
                 </li>
               </ul>
-              
+
               <Link
-                href="/login?next=/account?plan=weekly_sprint"
-                onClick={() => trackUpgradeClicked('weekly_sprint', 'pricing_page')}
+                href={`/login?next=/account?plan=${standardPlanKey}`}
+                onClick={() => trackUpgradeClicked(standardPlanKey, 'pricing_page')}
                 className="block w-full text-center rounded-lg border border-primary text-primary px-4 py-2 text-sm font-medium hover:bg-primary/10 transition-colors"
               >
-                Start Sprint Plan
+                Choose Standard
               </Link>
             </div>
 
@@ -148,15 +158,17 @@ export default function PricingPage() {
                   Popular
                 </span>
               </div>
-              
+
               <h3 className="text-xl font-bold mb-2">Pro</h3>
               <p className="text-3xl font-bold mb-1">${proPrice}</p>
               <p className="text-sm text-muted-foreground mb-6">{proPeriod}</p>
-              
+
               <ul className="space-y-3 mb-8 text-sm">
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span><strong>150</strong> Apply Packs / month</span>
+                  <span>
+                    <strong>{proPacks}</strong> Apply Packs / {isWeekly ? 'week' : 'month'}
+                  </span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
@@ -164,77 +176,26 @@ export default function PricingPage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>Track up to <strong>150</strong> active applications</span>
+                  <span>
+                    Track up to <strong>{proTrackerCap}</strong> active applications
+                  </span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
                   <span>DOCX export</span>
                 </li>
-                {isAnnual && (
-                  <li className="flex items-start gap-2">
-                    <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                    <span>$49 savings vs monthly</span>
-                  </li>
-                )}
+                <li className="flex items-start gap-2">
+                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
+                  <span>Higher Premium AI limits</span>
+                </li>
               </ul>
-              
+
               <Link
                 href={`/login?next=/account?plan=${proPlanKey}`}
                 onClick={() => trackUpgradeClicked(proPlanKey, 'pricing_page')}
                 className="block w-full text-center rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 transition-colors"
               >
                 Choose Pro
-              </Link>
-            </div>
-
-            {/* Power */}
-            <div className="rounded-xl border border-border bg-card p-6 relative">
-              <div className="absolute -top-3 left-1/2 -translate-x-1/2">
-                <span className="bg-gradient-to-r from-purple-500 to-pink-500 text-white px-3 py-1 rounded-full text-xs font-medium flex items-center gap-1">
-                  <Crown className="h-3 w-3" />
-                  Power
-                </span>
-              </div>
-              
-              <h3 className="text-xl font-bold mb-2">Power</h3>
-              <p className="text-3xl font-bold mb-1">${powerPrice}</p>
-              <p className="text-sm text-muted-foreground mb-6">{powerPeriod}</p>
-              
-              <ul className="space-y-3 mb-8 text-sm">
-                <li className="flex items-start gap-2">
-                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span><strong>300</strong> Apply Packs / month</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>Everything in Pro</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>Track up to <strong>300</strong> active applications</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>Priority queue</span>
-                </li>
-                <li className="flex items-start gap-2">
-                  <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>Advanced analytics</span>
-                </li>
-                {isAnnual && (
-                  <li className="flex items-start gap-2">
-                    <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                    <span>$89 savings vs monthly</span>
-                  </li>
-                )}
-              </ul>
-              
-              <Link
-                href={`/login?next=/account?plan=${powerPlanKey}`}
-                onClick={() => trackUpgradeClicked(powerPlanKey, 'pricing_page')}
-                className="block w-full text-center rounded-lg border border-primary text-primary px-4 py-2 text-sm font-medium hover:bg-primary/10 transition-colors"
-              >
-                Choose Power
               </Link>
             </div>
 

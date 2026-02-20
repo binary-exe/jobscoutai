@@ -4,13 +4,63 @@ Storage functions for Apply Workspace V1.
 Handles users, resumes, job targets, trust reports, apply packs, applications, and usage tracking.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Optional
 from uuid import UUID, uuid4
 import hashlib
 import json
 
 import asyncpg
+
+
+# Paid plan keys (include legacy values for backwards compat)
+PAID_PLANS = (
+    "weekly_standard",
+    "weekly_pro",
+    "weekly_sprint",
+    "monthly_standard",
+    "monthly_pro",
+    "monthly_power",
+    "annual_pro",
+    "annual_power",
+    "pro",
+    "pro_plus",
+    "annual",
+    "paid",
+)
+
+
+def _now_utc() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _parse_dt(value: Any) -> Optional[datetime]:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, str):
+        try:
+            return datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except Exception:
+            return None
+    return None
+
+
+def is_paid_user(user: Optional[Dict[str, Any]], now: Optional[datetime] = None) -> bool:
+    if not user:
+        return False
+    plan = (user.get("plan") or "free").strip().lower()
+    if plan not in PAID_PLANS:
+        return False
+    status = (user.get("subscription_status") or None)
+    if status in ("active", "past_due", None):
+        return True
+    if status in ("cancelled", "canceled"):
+        ends_at = _parse_dt(user.get("subscription_ends_at"))
+        if ends_at is None:
+            return False
+        now = now or _now_utc()
+        return ends_at > now
+    return False
 
 
 # ==================== Users ====================
@@ -786,6 +836,167 @@ async def get_user_usage_count(
     return row["count"] if row else 0
 
 
+# ==================== Credit Ledger ====================
+
+async def get_credit_balance(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    now: Optional[datetime] = None,
+) -> int:
+    try:
+        now = now or _now_utc()
+        row = await conn.fetchrow(
+            """
+            SELECT COALESCE(SUM(delta_credits), 0) AS balance
+            FROM credit_ledger
+            WHERE user_id = $1
+              AND (available_at IS NULL OR available_at <= $2)
+              AND (expires_at IS NULL OR expires_at > $2)
+            """,
+            user_id, now
+        )
+        return int(row["balance"] or 0) if row else 0
+    except Exception:
+        return 0
+
+
+async def get_credit_next_expiry(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    now: Optional[datetime] = None,
+) -> Optional[datetime]:
+    try:
+        now = now or _now_utc()
+        row = await conn.fetchrow(
+            """
+            SELECT MIN(expires_at) AS next_expiry
+            FROM credit_ledger
+            WHERE user_id = $1
+              AND expires_at IS NOT NULL
+              AND expires_at > $2
+              AND (available_at IS NULL OR available_at <= $2)
+              AND delta_credits > 0
+            """,
+            user_id, now
+        )
+        return row["next_expiry"] if row else None
+    except Exception:
+        return None
+
+
+async def has_credit_ledger_entries(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+) -> bool:
+    try:
+        row = await conn.fetchrow(
+            "SELECT 1 FROM credit_ledger WHERE user_id = $1 LIMIT 1",
+            user_id
+        )
+        return row is not None
+    except Exception:
+        return False
+
+
+async def grant_credits(
+    conn: asyncpg.Connection,
+    *,
+    user_id: UUID,
+    amount: int,
+    reason: str,
+    feature: Optional[str] = None,
+    idempotency_key: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+    available_at: Optional[datetime] = None,
+    expires_at: Optional[datetime] = None,
+) -> Optional[Dict[str, Any]]:
+    if amount == 0:
+        return None
+    now = _now_utc()
+    available_at = available_at or now
+    row = await conn.fetchrow(
+        """
+        INSERT INTO credit_ledger (
+            entry_id, user_id, delta_credits, reason, feature,
+            idempotency_key, metadata, available_at, expires_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+        ON CONFLICT (idempotency_key) DO NOTHING
+        RETURNING *
+        """,
+        uuid4(),
+        user_id,
+        int(amount),
+        reason,
+        feature,
+        idempotency_key,
+        json.dumps(metadata) if metadata is not None else None,
+        available_at,
+        expires_at,
+    )
+    return dict(row) if row else None
+
+
+async def spend_credits(
+    conn: asyncpg.Connection,
+    *,
+    user_id: UUID,
+    amount: int,
+    feature: str,
+    idempotency_key: Optional[str] = None,
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    if amount <= 0:
+        return {"allowed": True, "balance": await get_credit_balance(conn, user_id)}
+    balance = await get_credit_balance(conn, user_id)
+    if balance < amount:
+        return {"allowed": False, "balance": balance}
+    row = await conn.fetchrow(
+        """
+        INSERT INTO credit_ledger (
+            entry_id, user_id, delta_credits, reason, feature,
+            idempotency_key, metadata, available_at
+        )
+        VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+        ON CONFLICT (idempotency_key) DO NOTHING
+        RETURNING *
+        """,
+        uuid4(),
+        user_id,
+        int(-amount),
+        "spend",
+        feature,
+        idempotency_key,
+        json.dumps(metadata) if metadata is not None else None,
+        _now_utc(),
+    )
+    # If row is None, idempotency key already used; treat as allowed
+    new_balance = await get_credit_balance(conn, user_id)
+    return {"allowed": True, "balance": new_balance, "duplicate": row is None}
+
+
+async def set_credit_expiry_for_subscription(
+    conn: asyncpg.Connection,
+    *,
+    user_id: UUID,
+    expires_at: datetime,
+) -> None:
+    try:
+        await conn.execute(
+            """
+            UPDATE credit_ledger
+            SET expires_at = $2
+            WHERE user_id = $1
+              AND reason = 'plan_grant'
+              AND delta_credits > 0
+              AND expires_at IS NULL
+            """,
+            user_id, expires_at
+        )
+    except Exception:
+        pass
+
+
 async def check_user_quota(
     conn: asyncpg.Connection,
     user_id: UUID,
@@ -795,10 +1006,12 @@ async def check_user_quota(
     Check if user has quota remaining for an action.
     
     Tiered pricing:
-    - free: 2 apply packs/month, 5 tracked apps, no DOCX
-    - pro: 30 apply packs/month, unlimited tracking, DOCX export (€9/month)
-    - pro_plus: 100 apply packs/month, everything in pro + priority (€19/month)
-    - annual: Same as pro but yearly billing (€79/year)
+    - free: 2 apply packs/month, 5 tracked apps, limited DOCX
+    - weekly_standard: 20 apply packs/week, tracking up to 20 active, DOCX unlimited
+    - weekly_pro: 50 apply packs/week, tracking up to 50 active, DOCX unlimited
+    - monthly_standard: 120 apply packs/month, tracking up to 120 active, DOCX unlimited
+    - monthly_pro: 250 apply packs/month, tracking up to 250 active, DOCX unlimited
+    - legacy/other paid: weekly_sprint/monthly_power/annual_*/pro/pro_plus/annual/paid retained for backwards compat
     
     Pack top-ups add to base quota without changing plan.
     """
@@ -809,9 +1022,7 @@ async def check_user_quota(
     plan = user.get("plan", "free")
     
     # Check subscription status for paid plans
-    subscription_status = user.get("subscription_status")
-    paid_plans = ("pro", "pro_plus", "annual", "paid")  # Include legacy "paid" for backwards compat
-    if plan in paid_plans and subscription_status not in ("active", "past_due", None):
+    if plan in PAID_PLANS and not is_paid_user(user):
         # Subscription cancelled or expired - revert to free limits
         plan = "free"
     
@@ -819,12 +1030,76 @@ async def check_user_quota(
     quotas = {
         "free": {
             "apply_pack": 2,
-            "docx_export": 0,  # Not allowed on free
+            "docx_export": 6,  # Limited exports for free users
             "tracking": 5,  # 5 active applications for free users
             "trust_report": None,  # Unlimited
             # Premium AI (disabled for free by default)
             "ai_interview_coach": 0,
             "ai_template": 0,
+        },
+        "weekly_standard": {
+            "apply_pack": 20,
+            "docx_export": None,
+            "tracking": 20,
+            "trust_report": None,
+            "ai_interview_coach": 0,
+            "ai_template": 0,
+        },
+        "weekly_pro": {
+            "apply_pack": 50,
+            "docx_export": None,
+            "tracking": 50,
+            "trust_report": None,
+            "ai_interview_coach": 0,
+            "ai_template": 0,
+        },
+        "weekly_sprint": {
+            "apply_pack": 30,
+            "docx_export": None,
+            "tracking": 30,
+            "trust_report": None,
+            "ai_interview_coach": 0,
+            "ai_template": 0,
+        },
+        "monthly_standard": {
+            "apply_pack": 120,
+            "docx_export": None,
+            "tracking": 120,
+            "trust_report": None,
+            "ai_interview_coach": 20,
+            "ai_template": 40,
+        },
+        "monthly_pro": {
+            "apply_pack": 250,
+            "docx_export": None,
+            "tracking": 250,
+            "trust_report": None,
+            "ai_interview_coach": 100,
+            "ai_template": 200,
+        },
+        "monthly_power": {
+            "apply_pack": 300,
+            "docx_export": None,
+            "tracking": 300,
+            "trust_report": None,
+            "ai_interview_coach": 100,
+            "ai_template": 200,
+        },
+        "annual_pro": {
+            "apply_pack": 150,
+            "docx_export": None,
+            "tracking": 150,
+            "trust_report": None,
+            "ai_interview_coach": 20,
+            "ai_template": 40,
+        },
+        "annual_power": {
+            "apply_pack": 300,
+            "docx_export": None,
+            "tracking": 300,
+            "trust_report": None,
+            "ai_interview_coach": 100,
+            "ai_template": 200,
         },
         "pro": {
             "apply_pack": 30,
@@ -889,7 +1164,21 @@ async def check_user_quota(
         )
         used = row["count"] if row else 0
     else:
-        used = await get_user_usage_count(conn, user_id, action_type)
+        if plan.startswith("weekly_") and action_type == "apply_pack":
+            row = await conn.fetchrow(
+                """
+                SELECT COUNT(*) as count
+                FROM usage_ledger
+                WHERE user_id = $1
+                  AND action_type = $2
+                  AND date_trunc('week', created_at) = date_trunc('week', NOW())
+                """,
+                user_id,
+                action_type,
+            )
+            used = row["count"] if row else 0
+        else:
+            used = await get_user_usage_count(conn, user_id, action_type)
     
     remaining = quota - used
     
@@ -1013,7 +1302,7 @@ async def complete_referral(
     
     Returns the updated referral or None if not found/already completed.
     """
-    REFERRAL_PACKS = 10  # Packs awarded to each party
+    REFERRAL_PACKS = 10  # Legacy: packs awarded to each party
     
     # Find the referrer by code
     referrer = await get_user_by_referral_code(conn, referral_code)
@@ -1062,6 +1351,60 @@ async def complete_referral(
         # Award packs to referee
         await add_pack_topup(conn, referee_id, REFERRAL_PACKS)
     
+    return dict(row) if row else None
+
+
+async def complete_referral_for_paid_referee(
+    conn: asyncpg.Connection,
+    referrer_id: UUID,
+    referee_id: UUID,
+) -> Optional[Dict[str, Any]]:
+    """
+    Complete a referral when the referee becomes a paid user.
+    Award packs only to the referrer to keep referral costs bounded.
+    """
+    REFERRAL_PACKS = 5
+    REFERRAL_CREDITS = REFERRAL_PACKS * 10
+
+    existing = await conn.fetchrow(
+        """
+        SELECT * FROM referrals
+        WHERE referee_id = $1 AND status = 'completed'
+        """,
+        referee_id
+    )
+    if existing:
+        return None
+
+    ref_code = await get_or_create_referral_code(conn, referrer_id)
+
+    row = await conn.fetchrow(
+        """
+        INSERT INTO referrals (referrer_id, referee_id, referral_code, status,
+                              packs_awarded_referrer, packs_awarded_referee, completed_at)
+        VALUES ($1, $2, $3, 'completed', $4, 0, NOW())
+        ON CONFLICT (referral_code) DO UPDATE SET
+            referee_id = EXCLUDED.referee_id,
+            status = 'completed',
+            packs_awarded_referrer = $4,
+            packs_awarded_referee = 0,
+            completed_at = NOW()
+        RETURNING *
+        """,
+        referrer_id, referee_id, ref_code, REFERRAL_PACKS
+    )
+
+    if row:
+        await grant_credits(
+            conn,
+            user_id=referrer_id,
+            amount=REFERRAL_CREDITS,
+            reason="referral",
+            idempotency_key=f"referral:{referrer_id}:{referee_id}",
+            metadata={"referee_id": str(referee_id), "packs": REFERRAL_PACKS},
+            available_at=_now_utc(),
+        )
+
     return dict(row) if row else None
 
 

@@ -1,10 +1,10 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useRouter } from 'next/navigation';
+import { useState, useEffect, useCallback } from 'react';
+import { useRouter, useSearchParams } from 'next/navigation';
 import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
-import { Check, X, ExternalLink, Loader2, Gift, Copy, CheckCircle2 } from 'lucide-react';
+import { Check, ExternalLink, Loader2, Gift, Copy, CheckCircle2 } from 'lucide-react';
 import { getQuota, type Quota } from '@/lib/apply-api';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { trackReferralLinkCopied, setUserProperties } from '@/lib/analytics';
@@ -19,6 +19,7 @@ interface ReferralStats {
 
 export default function AccountPage() {
   const router = useRouter();
+  const searchParams = useSearchParams();
   const [authChecked, setAuthChecked] = useState(false);
   const [isAuthenticated, setIsAuthenticated] = useState(false);
   const [userEmail, setUserEmail] = useState<string | null>(null);
@@ -27,6 +28,27 @@ export default function AccountPage() {
   const [loading, setLoading] = useState(true);
   const [upgradeLoading, setUpgradeLoading] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [autoCheckoutStarted, setAutoCheckoutStarted] = useState(false);
+
+  const planKey = (quota?.plan || 'free').toLowerCase();
+  const planLabels: Record<string, string> = {
+    free: 'Free',
+    weekly_standard: 'Standard Weekly',
+    weekly_pro: 'Pro Weekly',
+    weekly_sprint: 'Sprint Weekly',
+    monthly_standard: 'Standard Monthly',
+    monthly_pro: 'Pro Monthly',
+    monthly_power: 'Power Monthly',
+    annual_pro: 'Annual Pro',
+    annual_power: 'Annual Power',
+    pro: 'Pro (Legacy)',
+    pro_plus: 'Pro+ (Legacy)',
+    annual: 'Annual (Legacy)',
+    paid: 'Paid (Legacy)',
+  };
+  const planLabel = planLabels[planKey] || (quota?.plan || 'Free');
+  const isPaidPlan = planKey !== 'free';
+  const planParam = searchParams.get('plan')?.toLowerCase() || undefined;
 
   // Auth check
   useEffect(() => {
@@ -110,7 +132,7 @@ export default function AccountPage() {
     }
   };
 
-  const handleUpgrade = async () => {
+  const handleUpgrade = useCallback(async (selectedPlan?: string) => {
     setUpgradeLoading(true);
     try {
       // Get auth token from Supabase
@@ -124,7 +146,8 @@ export default function AccountPage() {
       }
       
       // Get checkout URL from backend
-      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/paddle/checkout-url`, {
+      const planQuery = selectedPlan ? `?plan=${encodeURIComponent(selectedPlan)}` : '';
+      const response = await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/paddle/checkout-url${planQuery}`, {
         headers: {
           Authorization: `Bearer ${token}`,
         },
@@ -143,7 +166,15 @@ export default function AccountPage() {
     } finally {
       setUpgradeLoading(false);
     }
-  };
+  }, [router]);
+
+  useEffect(() => {
+    if (!authChecked || !isAuthenticated) return;
+    if (!planParam || autoCheckoutStarted) return;
+    if (planKey !== 'free') return;
+    setAutoCheckoutStarted(true);
+    handleUpgrade(planParam);
+  }, [authChecked, isAuthenticated, planParam, planKey, autoCheckoutStarted, handleUpgrade]);
 
   // Show loading while checking auth
   if (!authChecked) {
@@ -198,30 +229,35 @@ export default function AccountPage() {
                 <div className="flex items-center justify-between">
                   <div>
                     <div className="flex items-center gap-2 mb-2">
-                      <span className="text-2xl font-bold capitalize">{quota?.plan || 'free'}</span>
-                      {quota?.plan === 'paid' && (
+                      <span className="text-2xl font-bold">{planLabel}</span>
+                      {isPaidPlan && (
                         <span className="text-xs px-2 py-1 rounded bg-green-500/20 text-green-500">
-                          {quota.subscription_status === 'active' ? 'Active' : quota.subscription_status || 'Active'}
+                          {quota?.subscription_status === 'active' ? 'Active' : quota?.subscription_status || 'Active'}
                         </span>
                       )}
                     </div>
-                    {quota?.plan === 'free' ? (
+                    {planKey === 'free' ? (
                       <p className="text-sm text-muted-foreground">
-                        Upgrade to Pro for more apply packs and DOCX exports.
+                        Upgrade to a paid plan for more apply packs and higher limits.
                       </p>
                     ) : (
                       <p className="text-sm text-muted-foreground">
                         Your subscription is active. Manage it in Paddle customer portal.
                       </p>
                     )}
+                    {isPaidPlan && (
+                      <p className="text-xs text-muted-foreground mt-1">
+                        Unused credits roll over while your subscription is active.
+                      </p>
+                    )}
                   </div>
-                  {quota?.plan === 'free' ? (
+                  {planKey === 'free' ? (
                     <button
-                      onClick={handleUpgrade}
+                      onClick={() => handleUpgrade(planParam)}
                       disabled={upgradeLoading}
                       className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
                     >
-                      {upgradeLoading ? 'Loading...' : 'Upgrade to Pro'}
+                      {upgradeLoading ? 'Loading...' : 'Upgrade'}
                     </button>
                   ) : (
                     <a
@@ -241,15 +277,33 @@ export default function AccountPage() {
               <div className="rounded-xl border border-border bg-card p-6">
                 <h2 className="text-lg font-semibold mb-4">Usage This Month</h2>
                 <div className="space-y-4">
+                  {/* Credits */}
+                  {planKey !== 'free' && quota?.credits_enabled && (
+                    <div>
+                      <div className="flex items-center justify-between mb-2">
+                        <span className="text-sm font-medium">Credits</span>
+                        <span className="text-sm text-muted-foreground">
+                          {quota?.credits_balance} ({quota?.packs_equivalent || 0} packs)
+                        </span>
+                      </div>
+                      {quota?.credits_expires_soon && (
+                        <p className="text-xs text-amber-600 mt-1">
+                          Some credits expire soon.
+                        </p>
+                      )}
+                    </div>
+                  )}
                   {/* Apply Packs */}
                   <div>
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium">Apply Packs</span>
                       <span className="text-sm text-muted-foreground">
-                        {quota?.apply_packs.used || 0} / {quota?.apply_packs.limit === null ? '∞' : quota?.apply_packs.limit || 0}
+                        {quota?.credits_enabled
+                          ? `Available ${quota?.packs_equivalent || 0}`
+                          : `${quota?.apply_packs.used || 0} / ${quota?.apply_packs.limit === null ? 'Unlimited' : quota?.apply_packs.limit || 0}`}
                       </span>
                     </div>
-                    {quota?.apply_packs.limit !== null && (
+                    {!quota?.credits_enabled && quota?.apply_packs.limit !== null && (
                       <div className="w-full bg-muted rounded-full h-2">
                         <div
                           className="bg-primary h-2 rounded-full transition-all"
@@ -271,7 +325,7 @@ export default function AccountPage() {
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium">Active Tracked Applications</span>
                       <span className="text-sm text-muted-foreground">
-                        {quota?.tracking?.used || 0} / {quota?.tracking?.limit === null ? '∞' : quota?.tracking?.limit || 0}
+                        {quota?.tracking?.limit === null ? 'Unlimited' : `${quota?.tracking?.used || 0} / ${quota?.tracking?.limit || 0}`}
                       </span>
                     </div>
                     {quota?.tracking?.limit !== null && (
@@ -286,7 +340,7 @@ export default function AccountPage() {
                     )}
                     {quota?.tracking && !quota.tracking.allowed && (
                       <p className="text-xs text-red-500 mt-1">
-                        Tracking limit reached. Upgrade to track unlimited applications.
+                        Tracking limit reached. Upgrade to increase your tracking limit.
                       </p>
                     )}
                   </div>
@@ -296,12 +350,24 @@ export default function AccountPage() {
                     <div className="flex items-center justify-between mb-2">
                       <span className="text-sm font-medium">DOCX Exports</span>
                       <span className="text-sm text-muted-foreground">
-                        {quota?.plan === 'paid' ? 'Unlimited' : 'Paid only'}
+                        {quota?.docx_export?.limit === null
+                          ? 'Unlimited'
+                          : `${quota?.docx_export?.used || 0} / ${quota?.docx_export?.limit || 0}`}
                       </span>
                     </div>
-                    {quota?.plan === 'free' && (
-                      <p className="text-xs text-muted-foreground mt-1">
-                        Upgrade to Pro to export your apply packs as DOCX files.
+                    {quota?.docx_export?.limit !== null && (
+                      <div className="w-full bg-muted rounded-full h-2">
+                        <div
+                          className="bg-primary h-2 rounded-full transition-all"
+                          style={{
+                            width: `${Math.min(100, ((quota?.docx_export?.used || 0) / (quota?.docx_export?.limit || 1)) * 100)}%`,
+                          }}
+                        />
+                      </div>
+                    )}
+                    {quota?.docx_export && !quota.docx_export.allowed && (
+                      <p className="text-xs text-red-500 mt-1">
+                        DOCX export limit reached. Upgrade for more.
                       </p>
                     )}
                   </div>
@@ -316,7 +382,7 @@ export default function AccountPage() {
                 </div>
                 
                 <p className="text-sm text-muted-foreground mb-4">
-                  Give <strong>10 free Apply Packs</strong> to your friends, get <strong>10 free Apply Packs</strong> when they create their first one!
+                  Refer a friend and earn <strong>5 Apply Packs</strong> when they become a paid user.
                 </p>
                 
                 {referralStats ? (
@@ -374,7 +440,7 @@ export default function AccountPage() {
                 <h2 className="text-lg font-semibold mb-4">Plan Features</h2>
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div>
-                    <h3 className="font-medium mb-2">Free Trial</h3>
+                    <h3 className="font-medium mb-2">Free</h3>
                     <ul className="space-y-2 text-sm">
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-green-500" />
@@ -386,24 +452,24 @@ export default function AccountPage() {
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-green-500" />
-                        <span>Copy outputs</span>
+                        <span>Limited application tracker</span>
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-green-500" />
-                        <span>Track up to 5 active applications</span>
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <X className="h-4 w-4 text-muted-foreground" />
-                        <span className="text-muted-foreground">DOCX export</span>
+                        <span>DOCX exports (up to 6 / month)</span>
                       </li>
                     </ul>
                   </div>
                   <div>
-                    <h3 className="font-medium mb-2">Pro (€9/month)</h3>
+                    <h3 className="font-medium mb-2">Paid Plans</h3>
                     <ul className="space-y-2 text-sm">
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-green-500" />
-                        <span>30 Apply Packs / month</span>
+                        <span>Standard: $4/week (20 packs) or $19/month (120 packs)</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <Check className="h-4 w-4 text-green-500" />
+                        <span>Pro: $9/week (50 packs) or $39/month (250 packs)</span>
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-green-500" />
@@ -411,15 +477,15 @@ export default function AccountPage() {
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-green-500" />
-                        <span>Unlimited application tracker</span>
-                      </li>
-                      <li className="flex items-center gap-2">
-                        <Check className="h-4 w-4 text-green-500" />
                         <span>DOCX export</span>
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-green-500" />
-                        <span>Priority queue</span>
+                        <span>Tracking limit matches your Apply Pack limit</span>
+                      </li>
+                      <li className="flex items-center gap-2">
+                        <Check className="h-4 w-4 text-green-500" />
+                        <span>Higher Premium AI limits on Pro</span>
                       </li>
                     </ul>
                   </div>

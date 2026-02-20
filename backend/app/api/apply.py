@@ -4,7 +4,7 @@ API endpoints for Apply Workspace V1.
 Handles job parsing, trust reports, resume processing, and apply pack generation.
 """
 
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
 import json
@@ -29,6 +29,9 @@ from backend.app.services import apply_pack_review
 from backend.app.services import learning_summary
 
 router = APIRouter(prefix="/apply", tags=["apply"])
+
+APPLY_PACK_CREDITS = 10
+APPLY_PACK_REVIEW_CREDITS = 2
 
 # python-multipart is required by FastAPI for UploadFile/File(...) endpoints.
 # In misconfigured dev environments, FastAPI raises at import time, which prevents the whole API from starting.
@@ -1158,16 +1161,77 @@ async def generate_apply_pack(
     check_rate_limit(user_id, apply_pack_limiter)
     
     async with db.connection() as conn:
-        # Check quota
-        quota = await apply_storage.check_user_quota(conn, user_id, "apply_pack")
-        if not quota["allowed"]:
-            raise HTTPException(
-                status_code=403,
-                detail=f"Quota exceeded. {quota.get('used', 0)}/{quota.get('limit', 0)} apply packs used this month."
+        user = await apply_storage.get_user(conn, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
+        resume_hash = apply_storage.hash_resume(request.resume_text)
+        job_hash = apply_storage.hash_job_target(
+            str(request.job_url) if request.job_url else None,
+            request.job_text
+        )
+        pack_hash = apply_storage.hash_apply_pack(resume_hash, job_hash)
+
+        # Check if apply pack already exists (cached)
+        existing_pack = await apply_storage.get_apply_pack_by_hash(conn, user_id, pack_hash)
+
+        if existing_pack:
+            # Return cached version
+            import json
+            bullets = existing_pack.get("tailored_bullets")
+            if isinstance(bullets, str):
+                try:
+                    bullets = json.loads(bullets)
+                except Exception:
+                    bullets = []
+            elif bullets is None:
+                bullets = []
+            
+            checklist = existing_pack.get("ats_checklist")
+            if isinstance(checklist, str):
+                try:
+                    checklist = json.loads(checklist)
+                except Exception:
+                    checklist = {}
+            elif checklist is None:
+                checklist = {}
+            
+            return ApplyPackResponse(
+                apply_pack_id=str(existing_pack["apply_pack_id"]),
+                tailored_summary=existing_pack.get("tailored_summary"),
+                tailored_bullets=bullets,
+                cover_note=existing_pack.get("cover_note"),
+                ats_checklist=checklist,
+                keyword_coverage=existing_pack.get("keyword_coverage"),
             )
+
+        has_credits = await apply_storage.has_credit_ledger_entries(conn, user_id)
+        use_credits = apply_storage.is_paid_user(user) and has_credits
+        review_allowed = False
+        if use_credits:
+            balance = await apply_storage.get_credit_balance(conn, user_id)
+            if balance < APPLY_PACK_CREDITS:
+                raise HTTPException(
+                    status_code=403,
+                    detail="Insufficient credits. Upgrade or add credits to continue."
+                )
+            settings = get_settings()
+            review_allowed = (
+                request.use_ai
+                and settings.apply_pack_review_enabled
+                and bool(settings.openai_api_key)
+                and balance >= (APPLY_PACK_CREDITS + APPLY_PACK_REVIEW_CREDITS)
+            )
+        else:
+            quota = await apply_storage.check_user_quota(conn, user_id, "apply_pack")
+            if not quota["allowed"]:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"Quota exceeded. {quota.get('used', 0)}/{quota.get('limit', 0)} apply packs used this month."
+                )
+            review_allowed = request.use_ai and apply_storage.is_paid_user(user)
         
         # Get or create resume
-        resume_hash = apply_storage.hash_resume(request.resume_text)
         resume = await apply_storage.get_resume_by_hash(conn, user_id, resume_hash)
         if not resume:
             # Analyze resume first
@@ -1273,40 +1337,6 @@ async def generate_apply_pack(
                 "rubric": job_target.get("role_rubric") or "",
             }
         
-        # Check if apply pack already exists (cached)
-        pack_hash = apply_storage.hash_apply_pack(resume_hash, job_hash)
-        existing_pack = await apply_storage.get_apply_pack_by_hash(conn, user_id, pack_hash)
-        
-        if existing_pack and not request.use_ai:
-            # Return cached version
-            import json
-            bullets = existing_pack.get("tailored_bullets")
-            if isinstance(bullets, str):
-                try:
-                    bullets = json.loads(bullets)
-                except Exception:
-                    bullets = []
-            elif bullets is None:
-                bullets = []
-            
-            checklist = existing_pack.get("ats_checklist")
-            if isinstance(checklist, str):
-                try:
-                    checklist = json.loads(checklist)
-                except Exception:
-                    checklist = {}
-            elif checklist is None:
-                checklist = {}
-            
-            return ApplyPackResponse(
-                apply_pack_id=str(existing_pack["apply_pack_id"]),
-                tailored_summary=existing_pack.get("tailored_summary"),
-                tailored_bullets=bullets,
-                cover_note=existing_pack.get("cover_note"),
-                ats_checklist=checklist,
-                keyword_coverage=existing_pack.get("keyword_coverage"),
-            )
-        
         # Extract company info from job_target (including from extracted_json for JobScout imports)
         import json
         extracted_json = job_target.get("extracted_json")
@@ -1347,16 +1377,16 @@ async def generate_apply_pack(
         )
 
         # Optional premium-only reviewer loop (advanced model reviews, cheap model revises)
-        if request.use_ai:
+        review_used = False
+        if request.use_ai and review_allowed:
             try:
                 settings = get_settings()
-                user_row = await apply_storage.get_user(conn, user_id)
                 job_text_for_review = (job_target.get("description_text") or request.job_text or "").strip()
-                pack_data = await apply_pack_review.review_and_refine_apply_pack(
+                review_result = await apply_pack_review.review_and_refine_apply_pack(
                     conn=conn,
                     settings=settings,
                     user_id=user_id,
-                    user_row=user_row,
+                    user_row=user,
                     resume_hash=resume_hash,
                     job_hash=job_hash,
                     pack_hash=pack_hash,
@@ -1367,6 +1397,9 @@ async def generate_apply_pack(
                     generator_model=settings.openai_model,
                     pack_data=pack_data,
                 )
+                if isinstance(review_result, dict):
+                    review_used = bool(review_result.pop("_review_used", False))
+                    pack_data = review_result
             except Exception as e:
                 # Never fail apply pack generation due to reviewer loop
                 print(f"Warning: Apply Pack review loop failed: {e}")
@@ -1399,6 +1432,31 @@ async def generate_apply_pack(
         if not isinstance(apply_pack_id_val, UUID):
             apply_pack_id_val = UUID(apply_pack_id_val) if isinstance(apply_pack_id_val, str) else UUID(str(apply_pack_id_val))
         await apply_storage.record_usage(conn, user_id, "apply_pack", apply_pack_id_val)
+
+        if use_credits:
+            credit_metadata = {"pack_hash": pack_hash}
+            spend_result = await apply_storage.spend_credits(
+                conn,
+                user_id=user_id,
+                amount=APPLY_PACK_CREDITS,
+                feature="apply_pack",
+                idempotency_key=f"{user_id}:apply_pack:{apply_pack_id_val}",
+                metadata=credit_metadata,
+            )
+            if not spend_result.get("allowed", False):
+                raise HTTPException(
+                    status_code=403,
+                    detail="Insufficient credits. Upgrade or add credits to continue."
+                )
+            if review_used:
+                await apply_storage.spend_credits(
+                    conn,
+                    user_id=user_id,
+                    amount=APPLY_PACK_REVIEW_CREDITS,
+                    feature="apply_pack_review",
+                    idempotency_key=f"{user_id}:apply_pack_review:{apply_pack_id_val}",
+                    metadata=credit_metadata,
+                )
         
         import json
         bullets = pack_data.get("tailored_bullets", [])
@@ -1503,7 +1561,7 @@ async def export_apply_pack_docx(
         if not quota["allowed"]:
             raise HTTPException(
                 status_code=403,
-                detail="DOCX export is only available for paid plans. Upgrade to export your apply packs."
+                detail="DOCX export limit reached. Upgrade for more exports."
             )
         
         # Get apply pack
@@ -1636,6 +1694,77 @@ async def export_apply_pack_docx(
             )
         except Exception as e:
             raise HTTPException(status_code=500, detail=f"Failed to generate export: {str(e)}")
+
+
+@router.get("/pack/{apply_pack_id}/ats-preview")
+async def get_apply_pack_ats_preview(
+    apply_pack_id: UUID,
+    user_id: UUID = Depends(require_auth_user),
+):
+    """
+    Return a plain-text ATS preview of the tailored resume.
+    This mirrors the document structure without DOCX formatting.
+    """
+    async with db.connection() as conn:
+        apply_pack = await conn.fetchrow(
+            """
+            SELECT ap.*, rv.resume_text, jt.title, jt.company, jt.keywords, jt.must_haves
+            FROM apply_packs ap
+            LEFT JOIN resume_versions rv ON ap.resume_id = rv.resume_id
+            LEFT JOIN job_targets jt ON ap.job_target_id = jt.job_target_id
+            WHERE ap.apply_pack_id = $1 AND ap.user_id = $2
+            """,
+            apply_pack_id, user_id
+        )
+        if not apply_pack:
+            raise HTTPException(status_code=404, detail="Apply pack not found")
+
+        tailored_bullets = apply_pack.get("tailored_bullets")
+        if isinstance(tailored_bullets, str):
+            try:
+                tailored_bullets = json.loads(tailored_bullets)
+            except Exception:
+                tailored_bullets = []
+        elif tailored_bullets is None:
+            tailored_bullets = []
+
+        ats_checklist = apply_pack.get("ats_checklist")
+        if isinstance(ats_checklist, str):
+            try:
+                ats_checklist = json.loads(ats_checklist)
+            except Exception:
+                ats_checklist = {}
+        elif ats_checklist is None:
+            ats_checklist = {}
+
+        optimized_experience = None
+        optimized_resume = None
+        if isinstance(ats_checklist, dict) and isinstance(ats_checklist.get("optimized_experience"), list):
+            optimized_experience = ats_checklist.get("optimized_experience")
+        if isinstance(ats_checklist, dict) and isinstance(ats_checklist.get("optimized_resume"), dict):
+            optimized_resume = ats_checklist.get("optimized_resume")
+
+        job_keywords = []
+        try:
+            if apply_pack.get("keywords"):
+                job_keywords.extend(list(apply_pack.get("keywords") or []))
+            if apply_pack.get("must_haves"):
+                job_keywords.extend(list(apply_pack.get("must_haves") or []))
+        except Exception:
+            job_keywords = []
+
+        from backend.app.services import docx_generator
+
+        resume_text = apply_pack.get("resume_text", "")
+        preview = docx_generator.generate_resume_plain_text(
+            tailored_summary=apply_pack.get("tailored_summary", ""),
+            tailored_bullets=tailored_bullets,
+            original_resume_text=resume_text,
+            job_keywords=job_keywords or None,
+            experience_override=optimized_experience,
+            resume_structure_override=optimized_resume,
+        )
+        return {"text": preview}
 
 
 @router.post("/application")
@@ -1855,10 +1984,53 @@ async def get_quota(
         user = await apply_storage.get_user(conn, user_id)
         if not user:
             raise HTTPException(status_code=404, detail="User not found")
+
+        legacy_plan = (user.get("plan") or "free").strip().lower()
+        if legacy_plan in {"pro", "pro_plus", "annual", "paid"} and apply_storage.is_paid_user(user):
+            mapped_plan = {
+                "pro_plus": "monthly_pro",
+                "annual": "monthly_standard",
+            }.get(legacy_plan, "monthly_standard")
+            await apply_storage.update_user_plan(
+                conn,
+                user_id=user_id,
+                plan=mapped_plan,
+                subscription_id=user.get("subscription_id"),
+                paddle_customer_id=user.get("paddle_customer_id"),
+                subscription_status=user.get("subscription_status"),
+                subscription_ends_at=user.get("subscription_ends_at"),
+            )
+            user = await apply_storage.get_user(conn, user_id)
+            if user and not await apply_storage.has_credit_ledger_entries(conn, user_id):
+                credits = 2500 if mapped_plan == "monthly_pro" else 1200
+                await apply_storage.grant_credits(
+                    conn,
+                    user_id=user_id,
+                    amount=credits,
+                    reason="plan_grant",
+                    idempotency_key=f"legacy-migrate:{user_id}",
+                    metadata={"plan": mapped_plan},
+                )
         
         apply_pack_quota = await apply_storage.check_user_quota(conn, user_id, "apply_pack")
         docx_quota = await apply_storage.check_user_quota(conn, user_id, "docx_export")
         tracking_quota = await apply_storage.check_user_quota(conn, user_id, "tracking")
+        now = datetime.now(timezone.utc)
+        has_credits = await apply_storage.has_credit_ledger_entries(conn, user_id)
+        credits_enabled = apply_storage.is_paid_user(user) and has_credits
+        credit_balance = await apply_storage.get_credit_balance(conn, user_id, now)
+        next_expiry = await apply_storage.get_credit_next_expiry(conn, user_id, now)
+        credits_expires_soon = bool(
+            next_expiry and next_expiry <= (now + timedelta(days=7))
+        )
+        if credits_enabled:
+            packs_available = credit_balance // APPLY_PACK_CREDITS if APPLY_PACK_CREDITS else 0
+            apply_pack_quota = {
+                "allowed": credit_balance >= APPLY_PACK_CREDITS,
+                "remaining": packs_available,
+                "limit": packs_available,
+                "used": 0,
+            }
         
         return {
             "plan": user.get("plan", "free"),
@@ -1866,6 +2038,10 @@ async def get_quota(
             "apply_packs": apply_pack_quota,
             "docx_export": docx_quota,
             "tracking": tracking_quota,
+            "credits_balance": credit_balance,
+            "credits_expires_soon": credits_expires_soon,
+            "credits_enabled": credits_enabled,
+            "packs_equivalent": credit_balance // APPLY_PACK_CREDITS if APPLY_PACK_CREDITS else 0,
             # Server capability flags for frontend gating (avoid noisy 404s when disabled)
             "premium_ai_enabled": bool(getattr(settings, "premium_ai_enabled", False)),
             "premium_ai_configured": bool(settings.openai_api_key),

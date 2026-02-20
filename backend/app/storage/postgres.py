@@ -135,6 +135,7 @@ async def init_schema(conn: asyncpg.Connection) -> None:
         "apply_schema_migration_trust_feedback.sql",
         "apply_schema_migration_ai_premium.sql",
         "apply_schema_migration_contacts.sql",
+        "apply_schema_migration_credit_ledger.sql",
     ]:
         await _exec_sql_file(fname)
 

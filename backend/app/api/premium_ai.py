@@ -21,6 +21,9 @@ from backend.app.api.apply import require_auth_user  # noqa: E402
 
 router = APIRouter(prefix="/apply/ai", tags=["ai-premium"])
 
+INTERVIEW_COACH_CREDITS = 12
+TEMPLATE_CREDITS = 5
+
 
 def _now_utc() -> datetime:
     return datetime.now(timezone.utc)
@@ -52,6 +55,10 @@ async def interview_coach(
         raise HTTPException(status_code=503, detail="AI not configured")
 
     async with db.connection() as conn:
+        user = await apply_storage.get_user(conn, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
         # Resolve job text from job_target if provided
         job_text = (payload.job_text or "").strip()
         job_hash = ""
@@ -85,9 +92,16 @@ async def interview_coach(
                 "result": cached["response_json"],
             }
 
-        quota = await apply_storage.check_user_quota(conn, user_id, "ai_interview_coach")
-        if not quota.get("allowed"):
-            raise HTTPException(status_code=403, detail="Premium AI quota exceeded or not available on your plan.")
+        has_credits = await apply_storage.has_credit_ledger_entries(conn, user_id)
+        use_credits = apply_storage.is_paid_user(user) and has_credits
+        if use_credits:
+            balance = await apply_storage.get_credit_balance(conn, user_id)
+            if balance < INTERVIEW_COACH_CREDITS:
+                raise HTTPException(status_code=403, detail="Insufficient credits for interview coach.")
+        else:
+            quota = await apply_storage.check_user_quota(conn, user_id, "ai_interview_coach")
+            if not quota.get("allowed"):
+                raise HTTPException(status_code=403, detail="Premium AI quota exceeded or not available on your plan.")
 
         result = await premium_ai.generate_interview_coach(
             settings=settings,
@@ -111,6 +125,15 @@ async def interview_coach(
         )
 
         await apply_storage.record_usage(conn, user_id, "ai_interview_coach")
+        if use_credits:
+            await apply_storage.spend_credits(
+                conn,
+                user_id=user_id,
+                amount=INTERVIEW_COACH_CREDITS,
+                feature="ai_interview_coach",
+                idempotency_key=f"{user_id}:ai_interview_coach:{cache_key}",
+                metadata={"cache_key": cache_key},
+            )
 
         return {
             "cached": False,
@@ -135,6 +158,10 @@ async def create_template(
     tone = payload.tone.strip().lower()
 
     async with db.connection() as conn:
+        user = await apply_storage.get_user(conn, user_id)
+        if not user:
+            raise HTTPException(status_code=404, detail="User not found")
+
         job_text = (payload.job_text or "").strip()
         job_hash = ""
         if payload.job_target_id:
@@ -167,9 +194,16 @@ async def create_template(
                 "result": cached["response_json"],
             }
 
-        quota = await apply_storage.check_user_quota(conn, user_id, "ai_template")
-        if not quota.get("allowed"):
-            raise HTTPException(status_code=403, detail="Premium AI quota exceeded or not available on your plan.")
+        has_credits = await apply_storage.has_credit_ledger_entries(conn, user_id)
+        use_credits = apply_storage.is_paid_user(user) and has_credits
+        if use_credits:
+            balance = await apply_storage.get_credit_balance(conn, user_id)
+            if balance < TEMPLATE_CREDITS:
+                raise HTTPException(status_code=403, detail="Insufficient credits for templates.")
+        else:
+            quota = await apply_storage.check_user_quota(conn, user_id, "ai_template")
+            if not quota.get("allowed"):
+                raise HTTPException(status_code=403, detail="Premium AI quota exceeded or not available on your plan.")
 
         result = await premium_ai.generate_template(
             settings=settings,
@@ -195,6 +229,15 @@ async def create_template(
         )
 
         await apply_storage.record_usage(conn, user_id, "ai_template")
+        if use_credits:
+            await apply_storage.spend_credits(
+                conn,
+                user_id=user_id,
+                amount=TEMPLATE_CREDITS,
+                feature="ai_template",
+                idempotency_key=f"{user_id}:ai_template:{cache_key}",
+                metadata={"cache_key": cache_key},
+            )
 
         return {
             "cached": False,

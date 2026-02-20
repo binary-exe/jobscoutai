@@ -288,6 +288,7 @@ export interface Quota {
     allowed: boolean;
     remaining?: number;
     limit?: number;
+    used?: number;
   };
   tracking: {
     allowed: boolean;
@@ -295,6 +296,10 @@ export interface Quota {
     limit?: number;
     used?: number;
   };
+  credits_balance?: number;
+  credits_expires_soon?: boolean;
+  credits_enabled?: boolean;
+  packs_equivalent?: number;
   premium_ai_enabled?: boolean;
   premium_ai_configured?: boolean;
   apply_pack_review_enabled?: boolean;

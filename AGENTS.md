@@ -748,8 +748,8 @@ JOBSCOUT_ENABLED_PROVIDERS=remotive,remoteok,arbeitnow,weworkremotely  # Optiona
 
 # AI (optional)
 JOBSCOUT_OPENAI_API_KEY=sk-...
-JOBSCOUT_OPENAI_MODEL=gpt-4o-mini
-JOBSCOUT_AI_ENABLED=false
+JOBSCOUT_OPENAI_MODEL=gpt-4.1-mini
+JOBSCOUT_AI_ENABLED=true
 JOBSCOUT_AI_MAX_JOBS=50
 
 # Public scrape guardrails

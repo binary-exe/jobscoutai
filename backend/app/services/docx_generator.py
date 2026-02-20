@@ -743,8 +743,8 @@ def _setup_resume_styles(doc: "Document") -> None:
         s_sec.font.size = Pt(11)
         s_sec.font.bold = True
         s_sec.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
-        s_sec.paragraph_format.space_before = Pt(10)
-        s_sec.paragraph_format.space_after = Pt(2)
+        s_sec.paragraph_format.space_before = Pt(12)
+        s_sec.paragraph_format.space_after = Pt(4)
     except Exception:
         pass
 
@@ -757,7 +757,7 @@ def _setup_resume_styles(doc: "Document") -> None:
         s_body.font.name = "Calibri"
         s_body.font.size = Pt(10.5)
         s_body.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
-        s_body.paragraph_format.space_after = Pt(2)
+        s_body.paragraph_format.space_after = Pt(3)
         s_body.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
     except Exception:
         pass
@@ -773,7 +773,7 @@ def _setup_resume_styles(doc: "Document") -> None:
         s_b.font.color.rgb = RGBColor(0x22, 0x22, 0x22)
         pf = s_b.paragraph_format
         pf.space_before = Pt(0)
-        pf.space_after = Pt(1)
+        pf.space_after = Pt(2)
         pf.line_spacing_rule = WD_LINE_SPACING.SINGLE
         pf.left_indent = Inches(0.30)
         pf.first_line_indent = Inches(-0.15)
@@ -790,7 +790,20 @@ def _setup_resume_styles(doc: "Document") -> None:
         s_role.font.size = Pt(11)
         s_role.font.color.rgb = RGBColor(0x11, 0x11, 0x11)
         s_role.paragraph_format.space_before = Pt(6)
-        s_role.paragraph_format.space_after = Pt(1)
+        s_role.paragraph_format.space_after = Pt(2)
+    except Exception:
+        pass
+
+    try:
+        if "ResumeSubtle" not in [s.name for s in doc.styles]:
+            s_sub = doc.styles.add_style("ResumeSubtle", WD_STYLE_TYPE.PARAGRAPH)
+        else:
+            s_sub = doc.styles["ResumeSubtle"]
+        s_sub.base_style = doc.styles["Normal"]
+        s_sub.font.name = "Calibri"
+        s_sub.font.size = Pt(10)
+        s_sub.font.color.rgb = RGBColor(0x44, 0x44, 0x44)
+        s_sub.paragraph_format.space_after = Pt(3)
     except Exception:
         pass
 
@@ -937,6 +950,44 @@ def _add_section_header(doc, title: str):
         pass
 
 
+def _flatten_core_skills(skills: Any) -> List[str]:
+    items: List[str] = []
+    if isinstance(skills, list):
+        for g in skills:
+            if isinstance(g, dict) and isinstance(g.get("items"), list):
+                items.extend([str(x).strip() for x in g.get("items", []) if str(x).strip()])
+            elif isinstance(g, str):
+                items.append(g.strip())
+    # de-dupe, preserve order
+    out: List[str] = []
+    seen = set()
+    for s in items:
+        if not s:
+            continue
+        key = s.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(s)
+    return out
+
+
+def _add_core_skills(doc: "Document", skills: List[str]) -> None:
+    if not skills:
+        return
+    # 2–3 lines max; comma-separated for clean reading
+    per_line = 8
+    lines = []
+    for i in range(0, min(len(skills), 18), per_line):
+        lines.append(", ".join(skills[i : i + per_line]))
+    for line in lines[:3]:
+        try:
+            para = doc.add_paragraph(line, style="ResumeBody")
+        except Exception:
+            para = doc.add_paragraph(line)
+        para.paragraph_format.space_after = Pt(2)
+
+
 def _select_relevant_keywords(
     *,
     job_keywords: Optional[list[str]],
@@ -1050,10 +1101,10 @@ def generate_resume_docx(
         name_para = doc.add_paragraph(style="ResumeName")
     except Exception:
         name_para = doc.add_paragraph()
-    name_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+    name_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
     name_run = name_para.add_run(name.upper())
     name_run.bold = True
-    name_run.font.size = Pt(18)
+    name_run.font.size = Pt(20)
     name_run.font.color.rgb = RGBColor(0x1A, 0x1A, 0x1A)
     name_para.paragraph_format.space_after = Pt(2)
     
@@ -1064,18 +1115,18 @@ def generate_resume_docx(
             title_para = doc.add_paragraph(style="ResumeTitle")
         except Exception:
             title_para = doc.add_paragraph()
-        title_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        title_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
         title_run = title_para.add_run(title)
-        title_run.font.size = Pt(11)
+        title_run.font.size = Pt(12)
         title_run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
         title_para.paragraph_format.space_after = Pt(4)
     
-    # Contact info (single line, centered)
+    # Contact info (single line, left-aligned)
     contact_items = parsed.get('contact', [])
     location = parsed.get('location', '')
     
     contact_parts = []
-    # ATS-friendly ordering: email, phone, location, links
+    # ATS-friendly ordering: location, phone, email, links
     email = None
     phone = None
     links: list[str] = []
@@ -1087,12 +1138,12 @@ def generate_resume_docx(
             phone = item.get("value")
         elif t in ("linkedin", "github", "website"):
             links.append(item.get("url", item.get("value", "")))
-    if email:
-        contact_parts.append(_clean_docx_text(email))
-    if phone:
-        contact_parts.append(_clean_docx_text(phone))
     if location:
         contact_parts.append(_clean_docx_text(location))
+    if phone:
+        contact_parts.append(_clean_docx_text(phone))
+    if email:
+        contact_parts.append(_clean_docx_text(email))
     for u in links:
         u = _clean_docx_text(u)
         if u:
@@ -1103,19 +1154,18 @@ def generate_resume_docx(
             contact_para = doc.add_paragraph(style="ResumeContact")
         except Exception:
             contact_para = doc.add_paragraph()
-        contact_para.alignment = WD_ALIGN_PARAGRAPH.CENTER
+        contact_para.alignment = WD_ALIGN_PARAGRAPH.LEFT
         # Keep only the most important items to avoid wrapping/indent glitches in Word.
-        # Order is already: email, phone, location, links...
+        # Order is already: location, phone, email, links...
         contact_text = " | ".join(contact_parts[:4])
         contact_run = contact_para.add_run(contact_text)
         contact_run.font.size = Pt(9)
         contact_run.font.color.rgb = RGBColor(0x00, 0x00, 0x00)
         contact_para.paragraph_format.space_after = Pt(8)
-    
-    _add_horizontal_line(doc)
+    # No separate horizontal line; section headers add subtle rule
     
     # ==================== PROFESSIONAL SUMMARY ====================
-    _add_section_header(doc, 'Professional Summary')
+    _add_section_header(doc, 'PROFESSIONAL SUMMARY')
     
     # Prefer AI-crafted structured summary if provided via override.
     if isinstance(resume_structure_override, dict) and resume_structure_override.get("summary"):
@@ -1123,59 +1173,46 @@ def generate_resume_docx(
     else:
         summary_text = tailored_summary if tailored_summary else parsed.get('summary', '')
     if summary_text:
-        for ptxt in _split_paragraphs(summary_text)[:3]:
+        for ptxt in _split_paragraphs(summary_text)[:4]:
             try:
                 summary_para = doc.add_paragraph(_clean_docx_text(ptxt), style="ResumeBody")
             except Exception:
                 summary_para = doc.add_paragraph(_clean_docx_text(ptxt))
-            summary_para.paragraph_format.space_after = Pt(4)
+            summary_para.paragraph_format.space_after = Pt(3)
             summary_para.paragraph_format.line_spacing_rule = WD_LINE_SPACING.SINGLE
+        # Optional 1-line proof line (years, scope, impact) if provided by optimized resume
+        if isinstance(resume_structure_override, dict) and resume_structure_override.get("summary_proof"):
+            try:
+                proof_para = doc.add_paragraph(_clean_docx_text(resume_structure_override.get("summary_proof")), style="ResumeSubtle")
+            except Exception:
+                proof_para = doc.add_paragraph(_clean_docx_text(resume_structure_override.get("summary_proof")))
         doc.add_paragraph().paragraph_format.space_after = Pt(2)
     
-    # ==================== KEY ACHIEVEMENTS (Tailored) ====================
-    # If a structured override includes its own achievements list, prefer it.
-    override_achievements = parsed.get("key_achievements")
-    key_achievements = override_achievements if isinstance(override_achievements, list) else tailored_bullets
-    if key_achievements:
-        _add_section_header(doc, 'Key Achievements')
-        for bullet in key_achievements:
-            bullet_text = bullet.get('text', '') if isinstance(bullet, dict) else str(bullet)
-            if bullet_text:
-                _add_bullet_paragraph(doc, bullet_text)
-    
-    # ==================== SKILLS ====================
-    skills = parsed.get('skills', [])
-    if skills:
-        _add_section_header(doc, 'Technical Skills')
-        for skill_group in skills:
-            if isinstance(skill_group, dict) and skill_group.get('category'):
-                try:
-                    para = doc.add_paragraph(style="ResumeBody")
-                except Exception:
-                    para = doc.add_paragraph()
-                cat_run = para.add_run(f"{skill_group['category']}: ")
-                cat_run.bold = True
-                para.add_run(', '.join(skill_group.get('items', [])))
-                para.paragraph_format.space_after = Pt(2)
-            elif isinstance(skill_group, dict) and skill_group.get('items'):
-                for item in skill_group['items']:
-                    _add_bullet_paragraph(doc, str(item))
+    # ==================== CORE SKILLS ====================
+    _add_section_header(doc, 'CORE SKILLS')
+    core_skills = parsed.get('core_skills')
+    skills = core_skills if isinstance(core_skills, list) else parsed.get('skills', [])
+    core = _flatten_core_skills(skills)
+    _add_core_skills(doc, core)
 
-        # Optional ATS keyword line (only includes keywords already present in resume/pack text)
-        kws = _select_relevant_keywords(
-            job_keywords=job_keywords,
-            resume_text=original_resume_text or "",
-            tailored_summary=tailored_summary or "",
-            tailored_bullets=tailored_bullets or [],
-            max_items=12,
-        )
-        already_has_kw_line = "relevant keywords:" in (original_resume_text or "").lower()
-        if kws and not already_has_kw_line:
+    # Optional ATS keyword line (only includes keywords already present in resume/pack text)
+    kws = _select_relevant_keywords(
+        job_keywords=job_keywords,
+        resume_text=original_resume_text or "",
+        tailored_summary=tailored_summary or "",
+        tailored_bullets=tailored_bullets or [],
+        max_items=12,
+    )
+    already_has_kw_line = "relevant keywords:" in (original_resume_text or "").lower()
+    if kws and not already_has_kw_line:
+        try:
+            kw_para = doc.add_paragraph(style="ResumeSubtle")
+        except Exception:
             kw_para = doc.add_paragraph()
-            r1 = kw_para.add_run("Relevant keywords: ")
-            r1.bold = True
-            kw_para.add_run(", ".join(kws))
-            kw_para.paragraph_format.space_after = Pt(4)
+        r1 = kw_para.add_run("Relevant keywords: ")
+        r1.bold = True
+        kw_para.add_run(", ".join(kws))
+        kw_para.paragraph_format.space_after = Pt(4)
     
     # ==================== EXPERIENCE ====================
     # Prefer full structured experience if provided by optimized_resume.
@@ -1184,32 +1221,39 @@ def generate_resume_docx(
         override_exp = resume_structure_override.get("experience")
     experience = override_exp if override_exp else (experience_override if (isinstance(experience_override, list) and experience_override) else parsed.get('experience', []))
     if experience:
-        _add_section_header(doc, 'Professional Experience')
+        _add_section_header(doc, 'PROFESSIONAL EXPERIENCE')
         
         for exp in experience:
-            # Job line with right-aligned dates (using tab stop)
             try:
                 job_para = doc.add_paragraph(style="ResumeRole")
             except Exception:
                 job_para = doc.add_paragraph()
 
-            # Title (bold)
-            title_run = job_para.add_run(_clean_docx_text(exp.get("title", "Position")))
-            title_run.bold = True
-            title_run.font.size = Pt(11)
-            
-            # Company
-            company = exp.get('company', '')
-            if company:
-                job_para.add_run(f" | {_clean_docx_text(company)}")
-            
-            # Location
-            location = exp.get('location', '')
-            if location:
-                job_para.add_run(f" | {_clean_docx_text(location)}")
+            title = _clean_docx_text(exp.get("title", "Position"))
+            company = _clean_docx_text(exp.get("company", ""))
+            location = _clean_docx_text(exp.get("location", ""))
+            dates = _clean_docx_text(exp.get("dates", ""))
 
-            # Dates (right aligned, same line)
-            _add_right_aligned_dates_run(job_para, exp.get("dates", ""), section=doc.sections[0])
+            left = title
+            if company:
+                left = f"{left} - {company}" if left else company
+            if location:
+                left = f"{left}, {location}" if left else location
+            header = left
+            if dates:
+                header = f"{left} | {dates}" if left else dates
+
+            run = job_para.add_run(header)
+            run.bold = True
+            run.font.size = Pt(11)
+
+            scope_line = exp.get("scope") or exp.get("scope_line")
+            if scope_line:
+                try:
+                    scope_para = doc.add_paragraph(_clean_docx_text(str(scope_line)), style="ResumeSubtle")
+                except Exception:
+                    scope_para = doc.add_paragraph(_clean_docx_text(str(scope_line)))
+                scope_para.paragraph_format.space_after = Pt(2)
             
             # Bullets
             for bullet in exp.get('bullets', []):
@@ -1219,47 +1263,53 @@ def generate_resume_docx(
     # ==================== PROJECTS ====================
     projects = parsed.get('projects', [])
     if projects:
-        _add_section_header(doc, 'Projects')
+        _add_section_header(doc, 'PROJECTS')
         
         for proj in projects:
             try:
-                proj_para = doc.add_paragraph(style="ResumeBody")
+                proj_header = doc.add_paragraph(style="ResumeRole")
             except Exception:
-                proj_para = doc.add_paragraph()
-            proj_para.paragraph_format.space_before = Pt(6)
-            proj_para.paragraph_format.space_after = Pt(2)
+                proj_header = doc.add_paragraph()
+            proj_header.paragraph_format.space_before = Pt(6)
+            proj_header.paragraph_format.space_after = Pt(2)
             
-            # Project name (bold)
             pname = proj.get('name', 'Project')
             if not pname:
                 pname = "Project"
-            name_run = proj_para.add_run(_clean_docx_text(_strip_leading_markers(pname)))
+            name_run = proj_header.add_run(_clean_docx_text(_strip_leading_markers(pname)))
             name_run.bold = True
-            
-            # URL
-            url = proj.get('url', '')
+            name_run.font.size = Pt(11)
+
+            stack = _clean_docx_text(str(proj.get("stack") or proj.get("tech_stack") or ""))
+            if stack.strip().lower() in {"n/a", "na", "none", "null", "unknown"}:
+                stack = ""
+            url = _clean_docx_text(str(proj.get('url', '') or ""))
+            if stack:
+                proj_header.add_run(f" - {stack}")
             if url:
-                proj_para.add_run(f" | {_clean_docx_text(url)}")
+                proj_header.add_run(f" | {url}")
+
+            # One description line (not bold) to separate the project clearly
+            desc = proj.get("description")
+            if desc:
+                try:
+                    desc_para = doc.add_paragraph(_clean_docx_text(str(desc)), style="ResumeBody")
+                except Exception:
+                    desc_para = doc.add_paragraph(_clean_docx_text(str(desc)))
+                desc_para.paragraph_format.space_after = Pt(2)
             
-            # Description/Bullets
             for bullet in proj.get('bullets', []):
                 if bullet:
-                    btxt = _clean_docx_text(str(bullet))
-                    m = re.search(r"(https?://[^\s]+)", btxt)
-                    if m:
-                        u = m.group(1)
-                        desc = btxt.replace(u, "").strip(" -|")
-                        if desc:
-                            _add_bullet_paragraph(doc, f"{desc} | {u}")
-                        else:
-                            _add_bullet_paragraph(doc, u)
-                    else:
-                        _add_bullet_paragraph(doc, btxt)
+                    _add_bullet_paragraph(doc, _clean_docx_text(str(bullet)))
+
+            # Add a small spacer between projects for clarity
+            spacer = doc.add_paragraph()
+            spacer.paragraph_format.space_after = Pt(2)
     
     # ==================== EDUCATION ====================
     education = parsed.get('education', [])
     if education:
-        _add_section_header(doc, 'Education')
+        _add_section_header(doc, 'EDUCATION')
         
         for edu in education:
             try:
@@ -1268,27 +1318,23 @@ def generate_resume_docx(
                 edu_para = doc.add_paragraph()
             edu_para.paragraph_format.space_after = Pt(4)
             
-            # Degree (bold)
-            degree_run = edu_para.add_run(_clean_docx_text(edu.get('degree', '')))
-            degree_run.bold = True
-            
-            # School
+            degree = _clean_docx_text(edu.get('degree', ''))
             school = _clean_docx_text(edu.get('school', ''))
-            if school:
-                edu_para.add_run(f" | {school}")
-            
-            # Dates
             dates = _clean_docx_text(edu.get('dates', ''))
+            left = degree
+            if school:
+                left = f"{left} - {school}" if left else school
             if dates:
-                edu_para.add_run(f"  ({dates})")
+                left = f"{left} | {dates}" if left else dates
+            run = edu_para.add_run(left)
+            run.bold = True
     
     # ==================== CERTIFICATIONS ====================
     certifications = parsed.get('certifications', [])
     if certifications:
-        _add_section_header(doc, 'Certifications')
+        _add_section_header(doc, 'CERTIFICATIONS')
         
         for cert in certifications:
-            # Render as a single bullet line for consistency
             parts = [_clean_docx_text(cert.get("name", ""))]
             issuer = _clean_docx_text(cert.get("issuer", ""))
             date = _clean_docx_text(cert.get("date", ""))
@@ -1296,16 +1342,22 @@ def generate_resume_docx(
                 parts.append(issuer)
             if date:
                 parts.append(date)
-            _add_bullet_paragraph(doc, " - ".join([p for p in parts if p]))
+            try:
+                cert_para = doc.add_paragraph(style="ResumeBody")
+            except Exception:
+                cert_para = doc.add_paragraph()
+            cert_para.add_run(" - ".join([p for p in parts if p]))
     
-    # ==================== ACHIEVEMENTS ====================
-    achievements = parsed.get('achievements', [])
-    if achievements:
-        _add_section_header(doc, 'Notable Achievements')
-        
-        for achievement in achievements:
-            if achievement:
-                _add_bullet_paragraph(doc, achievement)
+    # ==================== ADDITIONAL ====================
+    additional = parsed.get('additional', [])
+    if additional:
+        _add_section_header(doc, 'ADDITIONAL')
+        for item in additional:
+            if item:
+                try:
+                    doc.add_paragraph(_clean_docx_text(str(item)), style="ResumeBody")
+                except Exception:
+                    doc.add_paragraph(_clean_docx_text(str(item)))
     
     # Save to BytesIO
     buffer = BytesIO()
@@ -1446,6 +1498,181 @@ def generate_cover_note_docx(
     doc.save(buffer)
     buffer.seek(0)
     return buffer
+
+
+def generate_resume_plain_text(
+    tailored_summary: str,
+    tailored_bullets: list[Dict[str, Any]],
+    original_resume_text: Optional[str] = None,
+    job_keywords: Optional[list[str]] = None,
+    experience_override: Optional[list[Dict[str, Any]]] = None,
+    resume_structure_override: Optional[Dict[str, Any]] = None,
+) -> str:
+    """
+    Generate a plain-text version of the resume for ATS preview.
+    """
+    parsed = _parse_resume_into_structure(original_resume_text) if original_resume_text else {}
+    if isinstance(resume_structure_override, dict) and resume_structure_override:
+        parsed = {**parsed, **resume_structure_override}
+
+    lines: List[str] = []
+
+    name = _clean_docx_text(parsed.get("name", "Your Name")).upper()
+    title = _clean_docx_text(parsed.get("title", ""))
+    contact_items = parsed.get("contact", [])
+    location = _clean_docx_text(parsed.get("location", ""))
+
+    email = None
+    phone = None
+    links: list[str] = []
+    for item in contact_items:
+        t = item.get("type")
+        if t == "email" and not email:
+            email = item.get("value")
+        elif t == "phone" and not phone:
+            phone = item.get("value")
+        elif t in ("linkedin", "github", "website"):
+            links.append(item.get("url", item.get("value", "")))
+
+    contact_parts = []
+    if location:
+        contact_parts.append(location)
+    if phone:
+        contact_parts.append(_clean_docx_text(phone))
+    if email:
+        contact_parts.append(_clean_docx_text(email))
+    for u in links:
+        u = _clean_docx_text(u)
+        if u:
+            contact_parts.append(u)
+
+    lines.append(name)
+    if title:
+        lines.append(title)
+    if contact_parts:
+        lines.append(" | ".join(contact_parts[:4]))
+
+    # Summary
+    lines.append("")
+    lines.append("PROFESSIONAL SUMMARY")
+    summary_text = ""
+    if isinstance(resume_structure_override, dict) and resume_structure_override.get("summary"):
+        summary_text = str(resume_structure_override.get("summary") or "")
+    else:
+        summary_text = tailored_summary if tailored_summary else parsed.get("summary", "")
+    for ptxt in _split_paragraphs(summary_text)[:4]:
+        lines.append(_clean_docx_text(ptxt))
+    if isinstance(resume_structure_override, dict) and resume_structure_override.get("summary_proof"):
+        lines.append(_clean_docx_text(resume_structure_override.get("summary_proof")))
+
+    # Core skills
+    lines.append("")
+    lines.append("CORE SKILLS")
+    core_skills = parsed.get("core_skills")
+    skills = core_skills if isinstance(core_skills, list) else parsed.get("skills", [])
+    core = _flatten_core_skills(skills)
+    if core:
+        per_line = 8
+        for i in range(0, min(len(core), 18), per_line):
+            lines.append(", ".join(core[i : i + per_line]))
+
+    # Experience
+    lines.append("")
+    lines.append("PROFESSIONAL EXPERIENCE")
+    override_exp = None
+    if isinstance(resume_structure_override, dict) and isinstance(resume_structure_override.get("experience"), list):
+        override_exp = resume_structure_override.get("experience")
+    experience = override_exp if override_exp else (experience_override if (isinstance(experience_override, list) and experience_override) else parsed.get("experience", []))
+    for exp in experience:
+        title = _clean_docx_text(exp.get("title", "Position"))
+        company = _clean_docx_text(exp.get("company", ""))
+        loc = _clean_docx_text(exp.get("location", ""))
+        dates = _clean_docx_text(exp.get("dates", ""))
+        left = title
+        if company:
+            left = f"{left} - {company}" if left else company
+        if loc:
+            left = f"{left}, {loc}" if left else loc
+        header = left
+        if dates:
+            header = f"{left} | {dates}" if left else dates
+        if header:
+            lines.append(header)
+        scope_line = exp.get("scope") or exp.get("scope_line")
+        if scope_line:
+            lines.append(_clean_docx_text(str(scope_line)))
+        for bullet in exp.get("bullets", []) or []:
+            if bullet:
+                lines.append(f"- {_clean_docx_text(str(bullet))}")
+
+    # Projects
+    projects = parsed.get("projects", [])
+    if projects:
+        lines.append("")
+        lines.append("PROJECTS")
+        for proj in projects:
+            pname = _clean_docx_text(_strip_leading_markers(proj.get("name", "Project")))
+            stack = _clean_docx_text(str(proj.get("stack") or proj.get("tech_stack") or ""))
+            if stack.strip().lower() in {"n/a", "na", "none", "null", "unknown"}:
+                stack = ""
+            url = _clean_docx_text(str(proj.get("url", "") or ""))
+            header = pname
+            if stack:
+                header = f"{header} - {stack}"
+            if url:
+                header = f"{header} | {url}"
+            lines.append(header)
+            desc = proj.get("description")
+            if desc:
+                lines.append(_clean_docx_text(str(desc)))
+            for bullet in proj.get("bullets", []) or []:
+                if bullet:
+                    lines.append(f"- {_clean_docx_text(str(bullet))}")
+            lines.append("")
+
+    # Education
+    education = parsed.get("education", [])
+    if education:
+        lines.append("")
+        lines.append("EDUCATION")
+        for edu in education:
+            degree = _clean_docx_text(edu.get("degree", ""))
+            school = _clean_docx_text(edu.get("school", ""))
+            dates = _clean_docx_text(edu.get("dates", ""))
+            left = degree
+            if school:
+                left = f"{left} - {school}" if left else school
+            if dates:
+                left = f"{left} | {dates}" if left else dates
+            if left:
+                lines.append(left)
+
+    # Certifications
+    certs = parsed.get("certifications", [])
+    if certs:
+        lines.append("")
+        lines.append("CERTIFICATIONS")
+        for cert in certs:
+            parts = [_clean_docx_text(cert.get("name", ""))]
+            issuer = _clean_docx_text(cert.get("issuer", ""))
+            date = _clean_docx_text(cert.get("date", ""))
+            if issuer:
+                parts.append(issuer)
+            if date:
+                parts.append(date)
+            line = " - ".join([p for p in parts if p])
+            if line:
+                lines.append(line)
+
+    additional = parsed.get("additional", [])
+    if additional:
+        lines.append("")
+        lines.append("ADDITIONAL")
+        for item in additional:
+            if item:
+                lines.append(_clean_docx_text(str(item)))
+
+    return "\n".join([l for l in lines if l is not None])
 
 
 def generate_apply_pack_zip(

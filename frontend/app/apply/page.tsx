@@ -1331,7 +1331,7 @@ export default function ApplyWorkspacePage() {
                             document.body.removeChild(a);
                             trackDocxDownloaded(applyPack.apply_pack_id, 'resume');
                           } catch (err) {
-                            alert(err instanceof Error ? err.message : 'DOCX export requires paid plan');
+                            alert(err instanceof Error ? err.message : 'DOCX export limit reached. Upgrade for more exports.');
                           }
                         }
                       }}
@@ -1356,7 +1356,7 @@ export default function ApplyWorkspacePage() {
                               document.body.removeChild(a);
                               trackDocxDownloaded(applyPack.apply_pack_id, 'cover');
                             } catch (err) {
-                              alert(err instanceof Error ? err.message : 'DOCX export requires paid plan');
+                              alert(err instanceof Error ? err.message : 'DOCX export limit reached. Upgrade for more exports.');
                             }
                           }
                         }}
@@ -1381,7 +1381,7 @@ export default function ApplyWorkspacePage() {
                             document.body.removeChild(a);
                             trackDocxDownloaded(applyPack.apply_pack_id, 'combined');
                           } catch (err) {
-                            alert(err instanceof Error ? err.message : 'DOCX export requires paid plan');
+                            alert(err instanceof Error ? err.message : 'DOCX export limit reached. Upgrade for more exports.');
                           }
                         }
                       }}

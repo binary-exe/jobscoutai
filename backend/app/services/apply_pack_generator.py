@@ -152,7 +152,7 @@ async def generate_apply_pack(
         llm_config = LLMConfig(
             api_key=settings.openai_api_key,
             model=settings.openai_model,
-            max_tokens=3000,
+            max_tokens=2200,
             temperature=0.3,  # Slightly higher for creativity
         )
         
@@ -210,7 +210,7 @@ async def generate_apply_pack(
             resume_analysis=resume_analysis,
             job_analysis=job_analysis,
             job_title=job_title,
-            job_description=job_target.get("description_text", request.job_text or ""),
+            job_description=job_description or "",
             tailored_summary=summary,
             tailored_bullets=bullets,
         )
@@ -616,24 +616,27 @@ TAILORED KEY ACHIEVEMENTS (use as the achievements base; you may tighten them):
 
 Rules:
 - Keep name/contact info and role history truthful; do not invent anything.
-- Prefer 2-3 sentence summary with 1 concrete metric/outcome when available.
-- Key Achievements: 3-5 bullets, outcome-driven, simple punctuation.
-- Skills: group into 3-6 categories, order categories by relevance to the job.
+- Summary: 2-3 sentences + 1 proof line (years, scope, impact) when available.
+- Core skills: 12-18 items, keyword-dense, ordered by relevance.
 - Experience: 4-6 bullets per role; outcome-driven; keep all numbers the same as input (no new numbers).
 - Each role must include 1-2 bullets using job-specific phrasing from the job description excerpt (without inventing facts).
-- Projects: 1-2 bullets each if present; keep URLs if present.
-- Keep section names: summary, key_achievements, skills, experience, projects, education, certifications.
+- Include optional 1-line scope per role when known (team size, product, scale, revenue).
+- Projects: each project must be a single object. Do not split a project into multiple items.
+- Include a single description line + 1-2 bullets; avoid repeating the description in bullets.
+- If you need to add details, add them as bullets under the same project, not as a new project.
+- Keep section names: summary, summary_proof, core_skills, experience, projects, education, certifications, additional.
 - Output must be valid JSON only.
 
 Return JSON with this exact shape:
 {{
   "summary": "string",
-  "key_achievements": ["...", "..."],
-  "skills": [{{"category": "Category", "items": ["...", "..."]}}],
-  "experience": [{{"title": "", "company": "", "location": "", "dates": "", "bullets": ["..."]}}],
-  "projects": [{{"name": "", "url": "", "bullets": ["..."]}}],
+  "summary_proof": "string",
+  "core_skills": ["...", "..."],
+  "experience": [{{"title": "", "company": "", "location": "", "dates": "", "scope": "", "bullets": ["..."]}}],
+  "projects": [{{"name": "", "stack": "", "url": "", "description": "", "bullets": ["..."]}}],
   "education": [{{"degree": "", "school": "", "dates": ""}}],
-  "certifications": [{{"name": "", "issuer": "", "date": ""}}]
+  "certifications": [{{"name": "", "issuer": "", "date": ""}}],
+  "additional": ["..."]
 }}
 """
 
@@ -658,28 +661,51 @@ Return JSON with this exact shape:
             out.append(bt)
         return out
 
+    def _dedupe_texts(items: List[str]) -> List[str]:
+        out: List[str] = []
+        seen = set()
+        for it in items:
+            norm = re.sub(r"[^a-z0-9]+", " ", (it or "").lower()).strip()
+            if not norm or norm in seen:
+                continue
+            seen.add(norm)
+            out.append(it)
+        return out
+
+    def _is_nullish(s: str) -> bool:
+        return (s or "").strip().lower() in {"n/a", "na", "none", "null", "unknown"}
+
+    def _looks_like_project_fragment(name: str) -> bool:
+        n = (name or "").strip().lower()
+        if not n:
+            return True
+        if _is_nullish(n):
+            return True
+        # Common fragment/description starters rather than project names
+        if re.match(r"^(mvp|prototype|proof of concept|poc|built|developed|designed|implemented|integrated|created|launched|engineered|delivered|migration|refactor|automation)\b", n):
+            return True
+        # Sentence-like names are likely fragments
+        if n.endswith(".") and len(n.split()) > 6:
+            return True
+        return False
+
     cleaned: Dict[str, Any] = {}
     if isinstance(data.get("summary"), str):
         cleaned["summary"] = data.get("summary")
-    if isinstance(data.get("key_achievements"), list):
-        cleaned["key_achievements"] = _filter_bullets(data.get("key_achievements"))[:5]
-    if isinstance(data.get("skills"), list):
-        skills_out = []
-        for g in data.get("skills")[:8]:
-            if not isinstance(g, dict):
-                continue
-            cat = str(g.get("category") or "").strip()
-            items = [str(x or "").strip() for x in (g.get("items") or []) if str(x or "").strip()]
-            if not items:
-                continue
-            skills_out.append({"category": cat or None, "items": items[:12]})
-        cleaned["skills"] = skills_out
+    if isinstance(data.get("summary_proof"), str):
+        proof = data.get("summary_proof")
+        if not (_extract_numeric_tokens(proof) - allowed_numbers):
+            cleaned["summary_proof"] = proof
+    if isinstance(data.get("core_skills"), list):
+        core = [str(x or "").strip() for x in data.get("core_skills") if str(x or "").strip()]
+        cleaned["core_skills"] = core[:20]
     if isinstance(data.get("experience"), list):
         exp_out = []
         for e in data.get("experience")[:6]:
             if not isinstance(e, dict):
                 continue
             bullets = _filter_bullets(e.get("bullets"))
+            bullets = _dedupe_texts(bullets)
             if not bullets:
                 continue
             exp_out.append(
@@ -688,6 +714,7 @@ Return JSON with this exact shape:
                     "company": str(e.get("company") or ""),
                     "location": str(e.get("location") or ""),
                     "dates": str(e.get("dates") or ""),
+                    "scope": str(e.get("scope") or ""),
                     "bullets": bullets[:6],
                 }
             )
@@ -702,11 +729,51 @@ Return JSON with this exact shape:
             if not name:
                 # Don't emit anonymous projects; they render poorly and look unpolished.
                 continue
+            desc = str(p.get("description") or "").strip()
             bullets = _filter_bullets(p.get("bullets"))[:3]
+            if desc and bullets:
+                # Drop bullets that repeat the description
+                def _norm(s: str) -> str:
+                    return re.sub(r"[^a-z0-9]+", " ", s.lower()).strip()
+                n_desc = _norm(desc)
+                bullets = [b for b in bullets if _norm(b) != n_desc]
+            bullets = _dedupe_texts(bullets)
+            stack = str(p.get("stack") or "")
+            if _is_nullish(stack):
+                stack = ""
+            # Merge fragments into previous project when the "name" looks like a description
+            if proj_out and _looks_like_project_fragment(name):
+                prev = proj_out[-1]
+                if not prev.get("description"):
+                    prev["description"] = name if not desc else desc
+                else:
+                    # push fragment/desc into bullets if needed
+                    if name and name != prev.get("description"):
+                        prev["bullets"] = _dedupe_texts(list(prev.get("bullets") or []) + [name])
+                    if desc:
+                        prev["bullets"] = _dedupe_texts(list(prev.get("bullets") or []) + [desc])
+                if not prev.get("url") and url:
+                    prev["url"] = url
+                if not prev.get("stack") and stack:
+                    prev["stack"] = stack
+                continue
+            # Merge duplicate project names
+            if proj_out and re.sub(r"[^a-z0-9]+", "", name.lower()) == re.sub(r"[^a-z0-9]+", "", str(proj_out[-1].get("name") or "").lower()):
+                prev = proj_out[-1]
+                if not prev.get("description") and desc:
+                    prev["description"] = desc
+                prev["bullets"] = _dedupe_texts(list(prev.get("bullets") or []) + bullets)
+                if not prev.get("url") and url:
+                    prev["url"] = url
+                if not prev.get("stack") and stack:
+                    prev["stack"] = stack
+                continue
             proj_out.append(
                 {
                     "name": name,
+                    "stack": stack,
                     "url": url,
+                    "description": desc,
                     "bullets": bullets,
                 }
             )
@@ -737,6 +804,10 @@ Return JSON with this exact shape:
                 }
             )
         cleaned["certifications"] = cert_out
+    if isinstance(data.get("additional"), list):
+        add_out = [str(x or "").strip() for x in data.get("additional") if str(x or "").strip()]
+        if add_out:
+            cleaned["additional"] = add_out[:6]
 
     return cleaned or None
 

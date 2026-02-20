@@ -1,8 +1,7 @@
 """
 API endpoints for Referral System.
 
-"Give 10 packs, Get 10 packs" - both referrer and referee get 10 Apply Packs
-when the referee creates their first Apply Pack.
+Referrer earns 5 Apply Packs when the referee becomes a paid user.
 """
 
 from uuid import UUID
@@ -62,7 +61,7 @@ async def apply_referral_code(
     Apply a referral code for the current user.
     
     This is called when a user signs up through a referral link.
-    The actual pack awards happen when the referee creates their first Apply Pack.
+    The actual pack awards happen when the referee becomes a paid user.
     """
     async with db.connection() as conn:
         try:
@@ -88,7 +87,7 @@ async def apply_referral_code(
             
             return {
                 "status": "applied",
-                "message": "Referral code applied! You'll both get 10 free Apply Packs when you create your first Apply Pack.",
+                "message": "Referral code applied! Your referrer earns 5 Apply Packs when you become a paid user.",
             }
         except HTTPException:
             raise

@@ -18,7 +18,7 @@ CREATE INDEX IF NOT EXISTS idx_pack_topups_user_id ON pack_topups(user_id);
 -- The plan column already exists and accepts any string, so no schema change needed
 -- Valid values: 'free', 'pro', 'pro_plus', 'annual', 'paid' (legacy)
 
-COMMENT ON TABLE pack_topups IS 'One-time pack purchases (+25 packs for €5)';
-COMMENT ON COLUMN pack_topups.pack_count IS 'Number of packs added (default 25)';
+COMMENT ON TABLE pack_topups IS 'One-time pack purchases (adds apply packs)';
+COMMENT ON COLUMN pack_topups.pack_count IS 'Number of packs added';
 COMMENT ON COLUMN pack_topups.payment_id IS 'Paddle transaction ID for payment verification';
 COMMENT ON COLUMN pack_topups.expires_at IS 'NULL means never expires';

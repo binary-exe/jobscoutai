@@ -166,8 +166,8 @@ class Settings(BaseSettings):
 
     # AI settings
     openai_api_key: Optional[str] = None
-    openai_model: str = "gpt-4o-mini"
-    ai_enabled: bool = False
+    openai_model: str = "gpt-4.1-mini"
+    ai_enabled: bool = True
     ai_max_jobs: int = 50  # Cost control
 
     # Premium AI (Apply Workspace add-ons; quota-gated + cached)
@@ -175,13 +175,13 @@ class Settings(BaseSettings):
     premium_ai_max_tokens_interview: int = 1200
     premium_ai_max_tokens_template: int = 900
 
-    # Apply Pack reviewer loop (premium-only; disabled by default)
-    apply_pack_review_enabled: bool = False
-    apply_pack_review_model: str = "gpt-4.1"
+    # Apply Pack reviewer loop (premium-only)
+    apply_pack_review_enabled: bool = True
+    apply_pack_review_model: str = "gpt-4.1-mini"
     apply_pack_review_max_iters: int = 2
     apply_pack_review_timeout_s: int = 20
-    apply_pack_review_max_tokens_review: int = 900
-    apply_pack_review_max_tokens_revise: int = 1400
+    apply_pack_review_max_tokens_review: int = 700
+    apply_pack_review_max_tokens_revise: int = 1200
 
     # Embeddings (pgvector personalization)
     embeddings_enabled: bool = False
@@ -196,6 +196,17 @@ class Settings(BaseSettings):
     paddle_public_key: Optional[str] = None
     paddle_webhook_secret: Optional[str] = None
     paddle_product_id: Optional[str] = None  # Product/Price ID for Pro subscription
+    # New pricing (Standard/Pro; weekly/monthly)
+    paddle_price_id_weekly_standard: Optional[str] = None
+    paddle_price_id_weekly_pro: Optional[str] = None
+    paddle_price_id_monthly_standard: Optional[str] = None
+    # Keep paddle_price_id_monthly_pro for "monthly_pro" (current / latest)
+    paddle_price_id_weekly_sprint: Optional[str] = None
+    paddle_price_id_monthly_pro: Optional[str] = None
+    paddle_price_id_monthly_power: Optional[str] = None
+    paddle_price_id_annual_pro: Optional[str] = None
+    paddle_price_id_annual_power: Optional[str] = None
+    paddle_price_id_topup_20: Optional[str] = None
     paddle_environment: str = "sandbox"  # sandbox or production
 
     # Supabase (Auth)
