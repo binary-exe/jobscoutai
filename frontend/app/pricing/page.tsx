@@ -258,7 +258,7 @@ export default function PricingPage() {
               Questions? Contact us at <a href={`mailto:${SUPPORT_EMAIL}`} className="text-primary underline">{SUPPORT_EMAIL}</a>
             </p>
             <p className="text-xs text-muted-foreground">
-              Custom or enterprise pricing? We can provide a pricing sheet (e.g. PDF) on request for your team or procurement.
+              Custom or enterprise pricing? See our <Link href="/pricing/enterprise" className="text-primary underline">Custom &amp; Enterprise pricing</Link> guidelines, or contact us for a pricing sheet (e.g. PDF) for your team or procurement.
             </p>
           </div>
         </div>

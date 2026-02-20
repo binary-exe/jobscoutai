@@ -5,7 +5,8 @@
 
 export const PRODUCT_NAME = 'JobScoutAI';
 export const BRAND_NAME = 'JobScoutAI';
-export const OPERATOR_LEGAL_NAME = 'Abdullah Javaid';
+/** Legal business name (must match Paddle account). */
+export const COMPANY_LEGAL_NAME = 'AetherFlow Technologies Inc.';
 export const WEBSITE_URL = 'https://jobscoutai.vercel.app';
 export const GOVERNING_LAW = 'Pakistan';
 

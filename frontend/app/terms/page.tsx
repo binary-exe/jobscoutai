@@ -5,7 +5,7 @@ import { Footer } from '@/components/Footer';
 import {
   PRODUCT_NAME,
   BRAND_NAME,
-  OPERATOR_LEGAL_NAME,
+  COMPANY_LEGAL_NAME,
   SUPPORT_EMAIL,
   WEBSITE_URL,
   lastUpdatedISO,
@@ -29,7 +29,7 @@ export default function TermsPage() {
             <section>
               <h2 className="text-lg font-semibold mb-2">1. Who we are</h2>
               <p>
-                {PRODUCT_NAME} is a product and service offered by <strong>{OPERATOR_LEGAL_NAME}</strong>, a sole proprietor trading as {BRAND_NAME}. &quot;We&quot;, &quot;us&quot;, and &quot;the Service&quot; refer to {OPERATOR_LEGAL_NAME} and the {PRODUCT_NAME} product. These Terms &amp; Conditions govern your use of the {PRODUCT_NAME} website and services available at {WEBSITE_URL}.
+                {PRODUCT_NAME} is a product and service offered by <strong>{COMPANY_LEGAL_NAME}</strong>. &quot;We&quot;, &quot;us&quot;, and &quot;the Service&quot; refer to {COMPANY_LEGAL_NAME} and the {PRODUCT_NAME} product. These Terms &amp; Conditions govern your use of the {PRODUCT_NAME} website and services available at {WEBSITE_URL}.
               </p>
             </section>
 
@@ -82,7 +82,7 @@ export default function TermsPage() {
             <section>
               <h2 className="text-lg font-semibold mb-2">8. Limitation of liability</h2>
               <p>
-                To the maximum extent permitted by applicable law, we and {OPERATOR_LEGAL_NAME} shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the Service. Our total liability shall not exceed the amount you paid us in the twelve months preceding the claim.
+                To the maximum extent permitted by applicable law, we and {COMPANY_LEGAL_NAME} shall not be liable for any indirect, incidental, special, or consequential damages arising from your use of the Service. Our total liability shall not exceed the amount you paid us in the twelve months preceding the claim.
               </p>
             </section>
 
@@ -97,7 +97,7 @@ export default function TermsPage() {
               <h2 className="text-lg font-semibold mb-2">10. Contact</h2>
               <p>
                 For questions about these Terms, contact us at{' '}
-                <a href={`mailto:${SUPPORT_EMAIL}`} className="text-primary underline">{SUPPORT_EMAIL}</a> or via our <Link href="/contact" className="text-primary underline">Contact</Link> page. Governing law: {OPERATOR_LEGAL_NAME} operates under the laws of Pakistan.
+                <a href={`mailto:${SUPPORT_EMAIL}`} className="text-primary underline">{SUPPORT_EMAIL}</a> or via our <Link href="/contact" className="text-primary underline">Contact</Link> page. Governing law: {COMPANY_LEGAL_NAME} is the legal entity responsible for {PRODUCT_NAME}; these Terms are governed by the laws of the jurisdiction in which {COMPANY_LEGAL_NAME} is incorporated.
               </p>
             </section>
           </div>
