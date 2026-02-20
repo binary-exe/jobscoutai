@@ -66,7 +66,7 @@ export default async function HomePage({ searchParams }: PageProps) {
                 Find your perfect remote job
               </h1>
               <p className="mt-3 text-muted-foreground">
-                Thousands of remote opportunities from top companies, ranked by AI for your skills.
+                Thousands of remote opportunities from top companies, ranked by AI for your skills — plus tools to tailor your resume and cover letter, track applications, and review job trust signals.
               </p>
               
               <div className="mt-8">

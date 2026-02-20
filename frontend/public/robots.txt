@@ -1,3 +1,4 @@
-# Allow all crawlers (required for Paddle domain review and search engines)
+# Allow all crawlers (helps Paddle domain review and search engines)
 User-agent: *
 Allow: /
+

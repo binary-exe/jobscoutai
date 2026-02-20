@@ -12,8 +12,8 @@ const siteUrl = process.env.NEXT_PUBLIC_SITE_URL ?? 'http://localhost:3000'
 
 export const metadata: Metadata = {
   metadataBase: new URL(siteUrl),
-  title: 'JobScout - Find Your Perfect Remote Job',
-  description: 'AI-powered job aggregator for remote work opportunities. Find automation, engineering, and tech jobs from top companies.',
+  title: 'JobScoutAI - Find Remote Jobs & Tailor Applications',
+  description: 'JobScoutAI helps you find remote jobs and apply faster with AI-tailored resumes, cover letters, application tracking, and trust/scam analysis.',
   keywords: ['remote jobs', 'automation engineer', 'job search', 'tech jobs', 'AI jobs'],
   icons: {
     icon: [
@@ -22,14 +22,14 @@ export const metadata: Metadata = {
     ],
   },
   openGraph: {
-    title: 'JobScout - Find Your Perfect Remote Job',
-    description: 'AI-powered job aggregator for remote work opportunities.',
+    title: 'JobScoutAI - Find Remote Jobs & Tailor Applications',
+    description: 'Find remote jobs and apply faster with AI-tailored resumes and cover letters.',
     type: 'website',
   },
   twitter: {
     card: 'summary_large_image',
-    title: 'JobScout',
-    description: 'AI-powered job aggregator for remote work opportunities.',
+    title: 'JobScoutAI',
+    description: 'Find remote jobs and apply faster with AI-tailored resumes and cover letters.',
   },
 }
 

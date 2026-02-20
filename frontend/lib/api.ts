@@ -4,6 +4,18 @@
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
+type NextRevalidateInit = RequestInit & { next?: { revalidate?: number } };
+
+async function fetchWithTimeout(input: RequestInfo | URL, init: NextRevalidateInit = {}, timeoutMs = 8000) {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(input, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timeoutId);
+  }
+}
+
 export interface Job {
   job_id: string;
   title: string;
@@ -109,7 +121,7 @@ export async function getJobs(params: SearchParams = {}): Promise<JobListRespons
   if (params.page_size) searchParams.set('page_size', params.page_size.toString());
   
   const url = `${API_URL}/jobs?${searchParams.toString()}`;
-  const res = await fetch(url, { next: { revalidate: 60 } });
+  const res = await fetchWithTimeout(url, { next: { revalidate: 60 } }, 8000);
   
   if (!res.ok) {
     throw new Error('Failed to fetch jobs');
@@ -122,7 +134,7 @@ export async function getJobs(params: SearchParams = {}): Promise<JobListRespons
  * Fetch single job by ID.
  */
 export async function getJob(id: string): Promise<JobDetail> {
-  const res = await fetch(`${API_URL}/jobs/${id}`, { next: { revalidate: 60 } });
+  const res = await fetchWithTimeout(`${API_URL}/jobs/${id}`, { next: { revalidate: 60 } }, 8000);
   
   if (!res.ok) {
     throw new Error('Job not found');
@@ -135,7 +147,7 @@ export async function getJob(id: string): Promise<JobDetail> {
  * Fetch system stats.
  */
 export async function getStats(): Promise<Stats> {
-  const res = await fetch(`${API_URL}/admin/stats`, { next: { revalidate: 300 } });
+  const res = await fetchWithTimeout(`${API_URL}/admin/stats`, { next: { revalidate: 300 } }, 8000);
   
   if (!res.ok) {
     throw new Error('Failed to fetch stats');
@@ -148,7 +160,7 @@ export async function getStats(): Promise<Stats> {
  * Trigger an on-demand scrape (public endpoint).
  */
 export async function triggerScrape(input: { query: string; location?: string; use_ai?: boolean }): Promise<ScrapeResponse> {
-  const res = await fetch(`${API_URL}/scrape`, {
+  const res = await fetchWithTimeout(`${API_URL}/scrape`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({
@@ -156,7 +168,7 @@ export async function triggerScrape(input: { query: string; location?: string; u
       location: input.location,
       use_ai: !!input.use_ai,
     }),
-  });
+  }, 12000);
 
   if (!res.ok) {
     const text = await res.text().catch(() => '');
@@ -170,7 +182,7 @@ export async function triggerScrape(input: { query: string; location?: string; u
  * Get run status by id.
  */
 export async function getRun(runId: number): Promise<RunStatus> {
-  const res = await fetch(`${API_URL}/runs/${runId}`, { cache: 'no-store' });
+  const res = await fetchWithTimeout(`${API_URL}/runs/${runId}`, { cache: 'no-store' }, 8000);
   if (!res.ok) throw new Error('Failed to fetch run status');
   return res.json();
 }

@@ -10,8 +10,8 @@ export const metadata: Metadata = {
 };
 
 /**
- * Minimal static page for Paddle (or other reviewers) to verify footer navigation
- * when the homepage is temporarily inaccessible. Alternative URL for "Homepage (footer verification)".
+ * Minimal static page for reviewers to verify footer navigation
+ * if the homepage is temporarily inaccessible from their network.
  */
 export default function FooterVerificationPage() {
   return (
@@ -19,7 +19,8 @@ export default function FooterVerificationPage() {
       <main className="flex-1 container mx-auto max-w-2xl px-4 py-12">
         <h1 className="text-2xl font-bold tracking-tight mb-2">Footer verification</h1>
         <p className="text-muted-foreground mb-6">
-          This page confirms footer navigation and legal links for {PRODUCT_NAME}. Main homepage: <a href={WEBSITE_URL} className="text-primary underline">{WEBSITE_URL}</a>.
+          This page confirms footer navigation and legal links for {PRODUCT_NAME}. Main homepage:{' '}
+          <a href={WEBSITE_URL} className="text-primary underline">{WEBSITE_URL}</a>.
         </p>
         <p className="text-sm text-muted-foreground mb-8">
           If you could not access the main site, you can use this URL for footer verification. The footer below is the same as on every page of the site.
@@ -36,3 +37,4 @@ export default function FooterVerificationPage() {
     </div>
   );
 }
+

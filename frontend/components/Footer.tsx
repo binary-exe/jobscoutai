@@ -37,6 +37,9 @@ export function Footer() {
             </a>
           </div>
         </div>
+        <p className="mt-3 text-center text-xs text-muted-foreground">
+          Payments powered by Paddle.
+        </p>
       </div>
     </footer>
   );

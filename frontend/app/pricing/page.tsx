@@ -211,7 +211,7 @@ export default function PricingPage() {
               <div className="flex items-center justify-center gap-4">
                 <span className="text-2xl font-bold">+20 packs</span>
                 <span className="text-muted-foreground">for</span>
-                <span className="text-2xl font-bold text-primary">$5</span>
+                <span className="text-2xl font-bold text-primary">$10</span>
               </div>
               <p className="text-xs text-muted-foreground mt-2">One-time purchase, never expires</p>
             </div>
@@ -256,6 +256,13 @@ export default function PricingPage() {
           <div className="mt-12 text-center space-y-2">
             <p className="text-sm text-muted-foreground">
               Questions? Contact us at <a href={`mailto:${SUPPORT_EMAIL}`} className="text-primary underline">{SUPPORT_EMAIL}</a>
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Custom or enterprise pricing? See our{' '}
+              <Link href="/enterprise-pricing" className="text-primary underline">
+                Enterprise pricing sheet
+              </Link>{' '}
+              (and we can provide a PDF copy on request).
             </p>
           </div>
         </div>
