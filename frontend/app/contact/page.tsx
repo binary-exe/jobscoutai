@@ -32,7 +32,7 @@ export default function ContactPage() {
                 </a>
               </p>
               <p className="text-sm text-muted-foreground mt-1">
-                Use this for support, billing questions, or refund requests.
+                Use this for support, billing questions, refund requests, or to request a custom/enterprise pricing sheet (we can provide a downloadable PDF or document for your procurement team on request).
               </p>
             </div>
 

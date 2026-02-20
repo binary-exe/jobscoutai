@@ -16,13 +16,13 @@ export function Footer() {
               Pricing
             </Link>
             <Link href="/terms" className="hover:text-foreground transition-colors">
-              Terms
+              Terms &amp; Conditions
             </Link>
             <Link href="/privacy" className="hover:text-foreground transition-colors">
-              Privacy
+              Privacy Policy
             </Link>
             <Link href="/refunds" className="hover:text-foreground transition-colors">
-              Refunds
+              Refund Policy
             </Link>
             <Link href="/contact" className="hover:text-foreground transition-colors">
               Contact

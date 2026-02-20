@@ -29,7 +29,7 @@ export default function TermsPage() {
             <section>
               <h2 className="text-lg font-semibold mb-2">1. Who we are</h2>
               <p>
-                {BRAND_NAME} (&quot;we&quot;, &quot;us&quot;, &quot;the Service&quot;) is operated by {OPERATOR_LEGAL_NAME}, a sole proprietor. These Terms govern your use of the {PRODUCT_NAME} website and services available at {WEBSITE_URL}.
+                {PRODUCT_NAME} is a product and service offered by <strong>{OPERATOR_LEGAL_NAME}</strong>, a sole proprietor trading as {BRAND_NAME}. &quot;We&quot;, &quot;us&quot;, and &quot;the Service&quot; refer to {OPERATOR_LEGAL_NAME} and the {PRODUCT_NAME} product. These Terms &amp; Conditions govern your use of the {PRODUCT_NAME} website and services available at {WEBSITE_URL}.
               </p>
             </section>
 

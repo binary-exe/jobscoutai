@@ -256,8 +256,16 @@ export default function PricingPage() {
             </div>
           </div>
 
-          {/* Value Proposition */}
+          {/* Key features / deliverables (Paddle: clearly state what is included with purchase) */}
           <div className="mt-16 text-center">
+            <h2 className="text-xl font-semibold mb-2">Key features and deliverables included with your purchase</h2>
+            <p className="text-sm text-muted-foreground max-w-2xl mx-auto mb-6">
+              Depending on your plan, your purchase includes: AI-tailored cover letters and resume tweaks per job (Apply Packs), Trust Reports (scam and risk analysis for job listings), application tracking and history, DOCX export of tailored documents, access to aggregated remote job listings and search, and optional pack top-ups. Plan limits (e.g. Apply Packs per month) are shown above.
+            </p>
+          </div>
+
+          {/* Value Proposition */}
+          <div className="mt-12 text-center">
             <h2 className="text-xl font-semibold mb-4">Why JobScout?</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto">
               <div className="p-4">
@@ -284,9 +292,12 @@ export default function PricingPage() {
             </div>
           </div>
 
-          <div className="mt-12 text-center">
+          <div className="mt-12 text-center space-y-2">
             <p className="text-sm text-muted-foreground">
               Questions? Contact us at <a href={`mailto:${SUPPORT_EMAIL}`} className="text-primary underline">{SUPPORT_EMAIL}</a>
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Custom or enterprise pricing? We can provide a pricing sheet (e.g. PDF) on request for your team or procurement.
             </p>
           </div>
         </div>
