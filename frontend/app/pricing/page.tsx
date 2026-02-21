@@ -42,7 +42,7 @@ export default function PricingPage() {
               Choose Your Plan
             </h1>
             <p className="text-muted-foreground max-w-2xl mx-auto">
-              JobScoutAI helps you land remote jobs with AI-tailored resumes and cover letters, application tracking, and trust/scam analysis so you can apply with confidence. Start with a free tier, upgrade when you need more. All plans include Trust Reports and job browsing.
+              JobiQueue helps you land remote jobs with AI-tailored resumes and cover letters, application tracking, and trust/scam analysis so you can apply with confidence. Start with a free tier, upgrade when you need more. All plans include Trust Reports and job browsing.
             </p>
             <p className="mt-2 text-sm text-muted-foreground">
               <strong>1 Apply Pack</strong> = tailored cover letter + resume tweaks + trust report + saved to tracker
@@ -221,7 +221,7 @@ export default function PricingPage() {
 
           {/* Value Proposition */}
           <div className="mt-12 text-center">
-            <h2 className="text-xl font-semibold mb-4">Why JobScout?</h2>
+            <h2 className="text-xl font-semibold mb-4">Why JobiQueue?</h2>
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6 max-w-4xl mx-auto">
               <div className="p-4">
                 <div className="text-3xl mb-2">⏱️</div>

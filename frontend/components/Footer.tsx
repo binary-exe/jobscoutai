@@ -28,7 +28,7 @@ export function Footer() {
               Contact
             </Link>
             <a 
-              href="https://producthunt.com/products/jobscout"
+              href="https://producthunt.com/products/jobiqueue"
               target="_blank"
               rel="noopener noreferrer"
               className="hover:text-foreground transition-colors"

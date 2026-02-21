@@ -30,7 +30,7 @@ interface PageProps {
 
 // Generate JobPosting structured data for Google Jobs
 function generateJobPostingJsonLd(job: JobDetail) {
-  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://jobscoutai.vercel.app';
+  const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || 'https://jobiqueue.com';
   
   // Build the structured data object
   const jsonLd: Record<string, unknown> = {
@@ -87,7 +87,7 @@ function generateJobPostingJsonLd(job: JobDetail) {
   // Add identifier
   jsonLd.identifier = {
     '@type': 'PropertyValue',
-    name: 'JobScout',
+    name: 'JobiQueue',
     value: job.job_id,
   };
 

@@ -49,7 +49,7 @@ function formatRoleTitle(role: string | undefined): string {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const roleTitle = formatRoleTitle(params?.role);
-  const title = `Remote ${roleTitle} Jobs | JobScoutAI`;
+  const title = `Remote ${roleTitle} Jobs | JobiQueue`;
   const description = `Find the best remote ${roleTitle.toLowerCase()} jobs. Browse curated remote positions with AI-powered matching, trust reports, and personalized apply packs.`;
   
   return {
@@ -60,7 +60,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       `${roleTitle.toLowerCase()} remote positions`,
       `work from home ${roleTitle.toLowerCase()}`,
       'remote work',
-      'JobScout',
+      'JobiQueue',
     ],
     openGraph: {
       title,
@@ -171,7 +171,7 @@ export default async function RemoteRoleJobsPage({ params }: PageProps) {
             <p>
               Remote {roleTitle.toLowerCase()} positions offer the flexibility to work from anywhere 
               while building amazing products and solutions. Whether you&apos;re looking for your first 
-              remote role or transitioning from an office job, JobScoutAI helps you find legitimate 
+              remote role or transitioning from an office job, JobiQueue helps you find legitimate 
               opportunities with our AI-powered trust reports.
             </p>
             <p>

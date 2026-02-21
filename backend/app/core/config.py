@@ -11,16 +11,16 @@ from pydantic import Field, computed_field, field_validator, model_validator
 from pydantic_settings import BaseSettings
 
 _CORS_ENV = "JOBSCOUT_CORS_ORIGINS"
-_DEFAULT_CORS_RAW = '["http://localhost:3000","https://jobscoutai.vercel.app"]'
+_DEFAULT_CORS_RAW = '["http://localhost:3000","https://jobiqueue.com","https://www.jobiqueue.com","https://jobscoutai.vercel.app"]'
 
 
 def _parse_cors_origins(v: str) -> List[str]:
     """Parse CORS origins from env string (JSON or comma-separated). Never raises."""
     if not v or not isinstance(v, str):
-        return ["http://localhost:3000", "https://jobscoutai.vercel.app"]
+        return ["http://localhost:3000", "https://jobiqueue.com", "https://www.jobiqueue.com", "https://jobscoutai.vercel.app"]
     v = v.strip()
     if not v:
-        return ["http://localhost:3000", "https://jobscoutai.vercel.app"]
+        return ["http://localhost:3000", "https://jobiqueue.com", "https://www.jobiqueue.com", "https://jobscoutai.vercel.app"]
     # Try JSON (double-quoted only)
     try:
         parsed = json.loads(v)
@@ -39,14 +39,14 @@ def _parse_cors_origins(v: str) -> List[str]:
     # Comma-separated
     if "," in v:
         return [origin.strip() for origin in v.split(",") if origin.strip()]
-    return [v] if v else ["http://localhost:3000", "https://jobscoutai.vercel.app"]
+    return [v] if v else ["http://localhost:3000", "https://jobiqueue.com", "https://www.jobiqueue.com", "https://jobscoutai.vercel.app"]
 
 
 class Settings(BaseSettings):
     """Application settings loaded from environment variables."""
 
     # App
-    app_name: str = "JobScout API"
+    app_name: str = "JobiQueue API"
     debug: bool = False
     api_prefix: str = "/api/v1"
 

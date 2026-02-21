@@ -343,7 +343,7 @@ Before considering any task complete, verify:
 ```
 ┌──────────────────────────────────────────────────────────────┐
 │                    Frontend (Next.js)                         │
-│              Vercel: jobscoutai.vercel.app                    │
+│                 Vercel: jobiqueue.com                         │
 │  - Server-side rendering                                      │
 │  - On-demand scraping via POST /api/v1/scrape                │
 │  - Real-time job search with filters                          │
@@ -734,7 +734,7 @@ JOBSCOUT_USE_SQLITE=false
 JOBSCOUT_SQLITE_PATH=jobs.db
 
 # CORS (JSON array string)
-JOBSCOUT_CORS_ORIGINS='["https://jobscoutai.vercel.app","http://localhost:3000"]'
+JOBSCOUT_CORS_ORIGINS='["https://jobiqueue.com","https://www.jobiqueue.com","http://localhost:3000"]'
 
 # Admin
 JOBSCOUT_ADMIN_TOKEN=your-long-random-token-here
@@ -877,7 +877,7 @@ fly deploy -a jobscout-api
 **Set secrets (if needed):**
 ```bash
 fly secrets set JOBSCOUT_DATABASE_URL="..." -a jobscout-api
-fly secrets set JOBSCOUT_CORS_ORIGINS='["https://jobscoutai.vercel.app"]' -a jobscout-api
+fly secrets set JOBSCOUT_CORS_ORIGINS='["https://jobiqueue.com","https://www.jobiqueue.com"]' -a jobscout-api
 fly secrets set JOBSCOUT_ADMIN_TOKEN="..." -a jobscout-api
 ```
 
@@ -1009,7 +1009,7 @@ API_BASE=https://jobscout-api.fly.dev/api/v1 python scripts/smoke_api.py
 
 - **Repository**: https://github.com/binary-exe/jobscoutai
 - **Backend API**: https://jobscout-api.fly.dev/docs
-- **Frontend**: https://jobscoutai.vercel.app
+- **Frontend**: https://jobiqueue.com
 - **Deployment Guide**: See `DEPLOY.md`
 
 ---

@@ -1,7 +1,7 @@
 /**
  * PostHog Analytics Integration
  * 
- * Tracks conversion funnel events for JobScoutAI:
+ * Tracks conversion funnel events for JobiQueue:
  * - Sign-up rate
  * - First Apply Pack created
  * - Upgrade prompt views

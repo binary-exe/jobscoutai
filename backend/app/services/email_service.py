@@ -1,5 +1,5 @@
 """
-Email Service for JobScoutAI
+Email Service for JobiQueue
 
 Handles onboarding email sequences and transactional emails.
 Uses Resend API for email delivery.
@@ -23,10 +23,10 @@ from backend.app.core.config import settings
 # Email templates
 TEMPLATES = {
     "welcome": {
-        "subject": "Welcome to JobScout! Let's get you your first Apply Pack",
+        "subject": "Welcome to JobiQueue! Let's get you your first Apply Pack",
         "body": """Hi {name}!
 
-Welcome to JobScout - your AI-powered job application assistant.
+Welcome to JobiQueue - your AI-powered job application assistant.
 
 You've taken the first step toward smarter job hunting. Here's how to make the most of it:
 
@@ -52,7 +52,7 @@ Ready to land your next role faster?
 {site_url}/apply
 
 Best,
-The JobScout Team
+The JobiQueue Team
 """,
     },
     "case_study": {
@@ -63,7 +63,7 @@ Quick story that might inspire you:
 
 Sarah was applying to 20+ jobs a week but hearing crickets. She was spending hours tailoring each application... and getting nowhere.
 
-Then she tried JobScout.
+Then she tried JobiQueue.
 
 **The Results:**
 - Generated 15 Apply Packs in one afternoon
@@ -80,7 +80,7 @@ Ready to speed up your job search?
 {site_url}/apply
 
 Best,
-The JobScout Team
+The JobiQueue Team
 
 P.S. Sarah is now a Product Manager at a Series B startup. Your story could be next.
 """,
@@ -108,7 +108,7 @@ Or, invite friends to get free packs! You both get 10 packs when they create the
 {site_url}/account
 
 Best,
-The JobScout Team
+The JobiQueue Team
 """,
     },
     "launch_offer": {
@@ -130,7 +130,7 @@ This deal expires {expiry_date}, and we won't run it again.
 Claim your spot: {site_url}/pricing?deal=founders
 
 Best,
-The JobScout Team
+The JobiQueue Team
 
 P.S. Already landing interviews? Reply to this email - I'd love to hear your story!
 """,
@@ -139,12 +139,12 @@ P.S. Already landing interviews? Reply to this email - I'd love to hear your sto
         "subject": "Quick question about your experience",
         "body": """Hi {name}!
 
-You've been using JobScout for about a week now, and I'd love your honest feedback.
+You've been using JobiQueue for about a week now, and I'd love your honest feedback.
 
 **3 Quick Questions:**
 1. What's working well for you?
 2. What's frustrating or confusing?
-3. What feature would make JobScout 10x more useful?
+3. What feature would make JobiQueue 10x more useful?
 
 Just reply to this email - I read every response personally.
 
@@ -154,7 +154,7 @@ Thanks for being an early user!
 
 Best,
 {sender_name}
-Founder, JobScout
+Founder, JobiQueue
 """,
     },
 }
@@ -163,8 +163,8 @@ Founder, JobScout
 class EmailService:
     def __init__(self):
         self.api_key = os.getenv("RESEND_API_KEY")
-        self.from_email = os.getenv("EMAIL_FROM", "JobScout <hello@jobscoutai.com>")
-        self.site_url = os.getenv("SITE_URL", "https://jobscoutai.vercel.app")
+        self.from_email = os.getenv("EMAIL_FROM", "JobiQueue <hello@jobiqueue.com>")
+        self.site_url = os.getenv("SITE_URL", "https://jobiqueue.com")
         self.api_url = "https://api.resend.com/emails"
         
     def is_configured(self) -> bool:
@@ -280,7 +280,8 @@ class EmailService:
         """Send feedback request email (Email 5)."""
         name = name or to_email.split("@")[0]
         subject, body = self.render_template("feedback_request", name=name)
-        return await self.send_email(to_email, subject, body, reply_to="abdul@jobscoutai.com")
+        reply_to = os.getenv("REPLY_TO_EMAIL")
+        return await self.send_email(to_email, subject, body, reply_to=reply_to)
 
 
 # Singleton instance

@@ -4,6 +4,7 @@ API endpoints for Referral System.
 Referrer earns 5 Apply Packs when the referee becomes a paid user.
 """
 
+import os
 from uuid import UUID
 from fastapi import APIRouter, HTTPException, Depends
 from pydantic import BaseModel
@@ -40,7 +41,7 @@ async def get_referral_stats(
         stats = await apply_storage.get_user_referral_stats(conn, auth_user.user_id)
         
         # Build referral link
-        site_url = "https://jobscoutai.vercel.app"  # TODO: Make configurable
+        site_url = os.getenv("SITE_URL", "https://jobiqueue.com")
         referral_link = f"{site_url}/login?ref={stats['referral_code']}"
         
         return ReferralStatsResponse(
@@ -113,7 +114,7 @@ async def check_referral_code(code: str):
             
             return {
                 "valid": True,
-                "referrer_name": referrer.get("email", "").split("@")[0] if referrer.get("email") else "A JobScout user",
+                "referrer_name": referrer.get("email", "").split("@")[0] if referrer.get("email") else "A JobiQueue user",
             }
     except Exception:
         # Table/column might not exist yet

@@ -70,7 +70,7 @@ def create_app() -> FastAPI:
 
     # Always allow production frontend even if env misconfigured
     _cors_origins_safe = list(settings.cors_origins_list)
-    for origin in ("https://jobscoutai.vercel.app", "http://localhost:3000"):
+    for origin in ("https://jobiqueue.com", "https://www.jobiqueue.com", "https://jobscoutai.vercel.app", "http://localhost:3000"):
         if origin not in _cors_origins_safe:
             _cors_origins_safe.append(origin)
 

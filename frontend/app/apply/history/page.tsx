@@ -210,7 +210,7 @@ export default function HistoryPage() {
         return `${d.getUTCFullYear()}${pad(d.getUTCMonth() + 1)}${pad(d.getUTCDate())}T${pad(d.getUTCHours())}${pad(d.getUTCMinutes())}${pad(d.getUTCSeconds())}Z`;
       };
 
-      const uid = `jobscout-${Math.random().toString(36).slice(2)}@jobscout`;
+      const uid = `jobiqueue-${Math.random().toString(36).slice(2)}@jobiqueue`;
       const now = toIcsTs(new Date());
       const start = toIcsTs(dt);
       const end = toIcsTs(new Date(dt.getTime() + 30 * 60 * 1000)); // +30m default
@@ -218,7 +218,7 @@ export default function HistoryPage() {
       const ics = [
         'BEGIN:VCALENDAR',
         'VERSION:2.0',
-        'PRODID:-//JobScoutAI//Apply Tracker//EN',
+        'PRODID:-//JobiQueue//Apply Tracker//EN',
         'CALSCALE:GREGORIAN',
         'BEGIN:VEVENT',
         `UID:${uid}`,

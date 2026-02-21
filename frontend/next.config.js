@@ -23,7 +23,7 @@ const nextConfig = {
   env: {
     NEXT_PUBLIC_API_URL:
       process.env.NEXT_PUBLIC_API_URL
-      || (process.env.VERCEL ? 'https://jobscoutai.vercel.app/api/v1' : 'http://localhost:8000/api/v1'),
+      || (process.env.VERCEL ? 'https://jobiqueue.com/api/v1' : 'http://localhost:8000/api/v1'),
   },
   webpack: (config) => {
     config.resolve = config.resolve || {}

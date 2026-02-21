@@ -2,7 +2,7 @@
 
 ## Overview
 
-Paddle is used as the payment processor for JobScoutAI Apply Workspace. Paddle acts as the Merchant of Record (MoR), handling taxes and compliance.
+Paddle is used as the payment processor for JobiQueue Apply Workspace. Paddle acts as the Merchant of Record (MoR), handling taxes and compliance.
 
 ## Why Paddle?
 
@@ -31,7 +31,7 @@ Paddle is used as the payment processor for JobScoutAI Apply Workspace. Paddle a
 ### 3. Create Products
 
 1. Go to **Catalog > Products**
-2. Create product: **JobScoutAI Pro**
+2. Create product: **JobiQueue Pro**
    - Type: Subscription
    - Price: €9/month
    - Billing cycle: Monthly

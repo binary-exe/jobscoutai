@@ -36,7 +36,7 @@ async function main() {
 
   qs("openAppBtn").addEventListener("click", async () => {
     const s = await refreshState();
-    const appBase = s?.appBase || "https://jobscoutai.vercel.app";
+    const appBase = s?.appBase || "https://jobiqueue.com";
     chrome.tabs.create({ url: `${appBase.replace(/\/+$/, "")}/` });
   });
 
@@ -77,7 +77,7 @@ async function main() {
       const link = qs("openApplyAfterSave");
       if (link) {
         const s = await refreshState();
-        const appBase = (s?.appBase || "https://jobscoutai.vercel.app").replace(/\/+$/, "");
+        const appBase = (s?.appBase || "https://jobiqueue.com").replace(/\/+$/, "");
         link.href = `${appBase}/apply?job_target_id=${jt}`;
         link.classList.remove("hidden");
       }

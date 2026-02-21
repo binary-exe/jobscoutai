@@ -64,7 +64,7 @@ export function Header() {
           <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-foreground">
             <Search className="h-4 w-4 text-background" />
           </div>
-          <span className="font-semibold tracking-tight">JobScoutAI</span>
+          <span className="font-semibold tracking-tight">JobiQueue</span>
         </Link>
         
         <nav className="ml-auto flex items-center space-x-1">

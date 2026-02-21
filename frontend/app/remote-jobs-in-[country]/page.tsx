@@ -55,7 +55,7 @@ function formatCountryName(country: string | undefined): string {
 
 export async function generateMetadata({ params }: PageProps): Promise<Metadata> {
   const countryName = formatCountryName(params?.country);
-  const title = `Remote Jobs in ${countryName} | JobScoutAI`;
+  const title = `Remote Jobs in ${countryName} | JobiQueue`;
   const description = `Find remote jobs hiring in ${countryName}. Browse curated remote positions with AI-powered matching, trust reports, and personalized apply packs.`;
   
   return {
@@ -66,7 +66,7 @@ export async function generateMetadata({ params }: PageProps): Promise<Metadata>
       `${countryName} remote positions`,
       `work from home ${countryName}`,
       'remote work',
-      'JobScout',
+      'JobiQueue',
     ],
     openGraph: {
       title,
@@ -178,7 +178,7 @@ export default async function RemoteJobsInCountryPage({ params }: PageProps) {
             <h2 className="text-foreground">Remote Work in {countryName}</h2>
             <p>
               Looking for remote jobs that are open to candidates in {countryName}? 
-              JobScoutAI curates the best remote positions and helps you identify 
+              JobiQueue curates the best remote positions and helps you identify 
               real opportunities with our AI-powered trust reports.
             </p>
             <p>

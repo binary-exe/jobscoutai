@@ -1,12 +1,12 @@
-# JobScoutAI Saver (Chrome/Edge extension v1)
+# JobiQueue Saver (Chrome/Edge extension v1)
 
-This extension lets users **save a job posting in 1 click** into the JobScoutAI **Apply Workspace**.
+This extension lets users **save a job posting in 1 click** into the JobiQueue **Apply Workspace**.
 
 Key constraint: **no server crawling** — the extension only uses the content the user already loaded in their browser.
 
 ## Features
 
-- **Connect** by capturing the user’s Supabase session token from an active JobScoutAI tab (best-effort).
+- **Connect** by capturing the user’s Supabase session token from an active JobiQueue tab (best-effort).
 - **Save job** from the current active tab (LinkedIn / Indeed / ATS pages) by extracting:
   - title, company, location (best-effort)
   - description text (best-effort)
@@ -22,7 +22,7 @@ Key constraint: **no server crawling** — the extension only uses the content t
 
 ## How to use
 
-1. Open JobScoutAI (`https://jobscoutai.vercel.app`) and log in.
+1. Open JobiQueue (`https://jobiqueue.com`) and log in.
 2. With that tab active, open the extension popup and click **Connect**.
 3. Go to a job detail page (LinkedIn / Indeed / ATS).
 4. Open the extension popup and click **Save job**.
@@ -31,5 +31,5 @@ Key constraint: **no server crawling** — the extension only uses the content t
 ## Settings
 
 - **API base** defaults to `https://jobscout-api.fly.dev/api/v1`
-- **App base** defaults to `https://jobscoutai.vercel.app`
+- **App base** defaults to `https://jobiqueue.com`
 

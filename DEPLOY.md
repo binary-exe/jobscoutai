@@ -360,7 +360,7 @@ fly deploy -a jobscout-api
 - **Secrets to set** (if not already):
   ```bash
   fly secrets set JOBSCOUT_DATABASE_URL="postgresql://..." -a jobscout-api
-  fly secrets set JOBSCOUT_CORS_ORIGINS='["https://jobscoutai.vercel.app","http://localhost:3000"]' -a jobscout-api
+  fly secrets set JOBSCOUT_CORS_ORIGINS='["https://jobiqueue.com","https://www.jobiqueue.com","http://localhost:3000"]' -a jobscout-api
   fly secrets set JOBSCOUT_SUPABASE_URL="https://YOUR_PROJECT.supabase.co" -a jobscout-api
   fly secrets set JOBSCOUT_SUPABASE_ANON_KEY="..." -a jobscout-api
   fly secrets set JOBSCOUT_ADMIN_TOKEN="..." -a jobscout-api
@@ -389,7 +389,7 @@ fly deploy -a jobscout-api
 ### 3. Extension (Chrome/Edge)
 
 - **Load unpacked**: Chrome → Extensions → Developer mode → Load unpacked → select the `extension/` folder.
-- **Connect**: Open JobScoutAI in a tab, log in, then in the extension popup click **Connect**.
+- **Connect**: Open JobiQueue in a tab, log in, then in the extension popup click **Connect**.
 - **Save job**: On a job detail page (e.g. LinkedIn/Indeed), click **Save job** in the extension, then **Open Apply Workspace →** to deep-link and generate Trust Report.
 
 See `extension/README.md` for full steps.

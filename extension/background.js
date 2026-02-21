@@ -2,7 +2,7 @@
 
 const DEFAULTS = {
   apiBase: "https://jobscout-api.fly.dev/api/v1",
-  appBase: "https://jobscoutai.vercel.app",
+  appBase: "https://jobiqueue.com",
   token: null,
   tokenCapturedAt: null
 };
@@ -56,7 +56,7 @@ function _captureSupabaseAccessTokenInPage() {
         return { ok: true, token, key: k };
       }
     }
-    return { ok: false, error: "No Supabase session found. Make sure you are logged in to JobScoutAI in this tab." };
+    return { ok: false, error: "No Supabase session found. Make sure you are logged in to JobiQueue in this tab." };
   } catch (e) {
     return { ok: false, error: e?.message || "Failed to read session token" };
   }
@@ -238,7 +238,7 @@ function _extractJobFromPage() {
 
 async function saveCapturedJob() {
   const state = await getState();
-  if (!state.token) throw new Error("Not connected. Open JobScoutAI, log in, then click Connect in the extension.");
+  if (!state.token) throw new Error("Not connected. Open JobiQueue, log in, then click Connect in the extension.");
 
   const extraction = await executeInActiveTab(_extractJobFromPage);
   if (!extraction?.ok) throw new Error(extraction?.error || "Failed to extract job data");
