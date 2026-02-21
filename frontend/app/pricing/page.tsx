@@ -253,16 +253,9 @@ export default function PricingPage() {
             </div>
           </div>
 
-          <div className="mt-12 text-center space-y-2">
+          <div className="mt-12 text-center">
             <p className="text-sm text-muted-foreground">
               Questions? Contact us at <a href={`mailto:${SUPPORT_EMAIL}`} className="text-primary underline">{SUPPORT_EMAIL}</a>
-            </p>
-            <p className="text-xs text-muted-foreground">
-              Custom or enterprise pricing? See our{' '}
-              <Link href="/enterprise-pricing" className="text-primary underline">
-                Enterprise pricing sheet
-              </Link>{' '}
-              (and we can provide a PDF copy on request).
             </p>
           </div>
         </div>
