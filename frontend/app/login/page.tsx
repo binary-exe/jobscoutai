@@ -41,14 +41,22 @@ export default function LoginPage() {
         return;
       }
 
+      // Persist redirect intent locally so the callback URL stays clean.
+      // Supabase may append its own query params (code/error) and can mangle pre-existing queries.
+      try {
+        window.localStorage.setItem('jobiqueue_auth_next', nextUrl);
+        if (referralCode) {
+          window.localStorage.setItem('jobiqueue_auth_ref', referralCode);
+        } else {
+          window.localStorage.removeItem('jobiqueue_auth_ref');
+        }
+      } catch {
+        // Best-effort; continue without stored state.
+      }
+
       // Use NEXT_PUBLIC_SITE_URL if set, otherwise fall back to window.location.origin
       const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
-      let redirectTo = `${siteUrl}/auth/callback?next=${encodeURIComponent(nextUrl)}`;
-      
-      // Include referral code in callback if present
-      if (referralCode) {
-        redirectTo += `&ref=${encodeURIComponent(referralCode)}`;
-      }
+      const redirectTo = `${siteUrl}/auth/callback`;
 
       const { error: supaErr } = await supabase.auth.signInWithOtp({
         email,
@@ -78,7 +86,7 @@ export default function LoginPage() {
       <main className="flex-1">
         <section className="py-12">
           <div className="container mx-auto max-w-md px-4">
-            <h1 className="text-2xl font-semibold tracking-tight">Sign in to JobScout</h1>
+            <h1 className="text-2xl font-semibold tracking-tight">Sign in to JobiQueue</h1>
             <p className="mt-2 text-sm text-muted-foreground">
               Access your Apply Workspace, track applications, and get personalized job recommendations.
             </p>

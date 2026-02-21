@@ -6,6 +6,31 @@ import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { supabase } from '@/lib/supabase';
 
+function friendlyAuthError(code?: string | null, description?: string | null) {
+  const c = (code || '').toLowerCase();
+  const d = (description || '').trim();
+  if (c === 'otp_expired') return 'This magic link has expired. Please request a new one.';
+  if (c === 'access_denied') return d || 'Access denied. Please try logging in again.';
+  return d || (c ? `Login failed (${c}). Please try again.` : 'Login failed. Please try again.');
+}
+
+function getStored(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function clearStored() {
+  try {
+    window.localStorage.removeItem('jobiqueue_auth_next');
+    window.localStorage.removeItem('jobiqueue_auth_ref');
+  } catch {
+    // ignore
+  }
+}
+
 export default function AuthCallbackPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
@@ -17,25 +42,50 @@ export default function AuthCallbackPage() {
     (async () => {
       try {
         const code = searchParams.get('code');
-        const nextUrl = searchParams.get('next') || '/profile';
-        const referralCode = searchParams.get('ref');
+
+        // Supabase may append error params; handle them explicitly.
+        const errorCode = searchParams.get('error_code') || searchParams.get('error');
+        const errorDescription = searchParams.get('error_description');
+
+        // Legacy: if Supabase appended "?error=..." in a way that ended up inside `next`,
+        // surface it as a real error.
+        const nextParam = searchParams.get('next');
+        if (!errorCode && nextParam && nextParam.includes('?error=')) {
+          try {
+            const q = nextParam.split('?')[1] || '';
+            const qp = new URLSearchParams(q);
+            const nestedError = qp.get('error_code') || qp.get('error');
+            const nestedDesc = qp.get('error_description');
+            if (nestedError || nestedDesc) {
+              throw new Error(friendlyAuthError(nestedError, nestedDesc));
+            }
+          } catch (e) {
+            if (e instanceof Error) throw e;
+          }
+        }
+
+        if (errorCode || errorDescription) {
+          throw new Error(friendlyAuthError(errorCode, errorDescription));
+        }
+
+        const nextUrl = nextParam || getStored('jobiqueue_auth_next') || '/profile';
+        const referralCode = searchParams.get('ref') || getStored('jobiqueue_auth_ref');
 
         if (code) {
           const { error: exchangeError } = await supabase.auth.exchangeCodeForSession(code);
           if (exchangeError) throw exchangeError;
-        } else {
-          // Some flows don't use the code param; still try to load session
-          const { data } = await supabase.auth.getSession();
-          if (!data.session) {
-            throw new Error('No session found. Please try logging in again.');
-          }
+        }
+
+        // Some flows don't use the code param (or rely on URL hash parsing); ensure session exists.
+        const { data } = await supabase.auth.getSession();
+        if (!data.session) {
+          throw new Error('We could not complete sign-in. Please request a new magic link.');
         }
 
         // Apply referral code if present
         if (referralCode) {
           try {
-            const { data: sessionData } = await supabase.auth.getSession();
-            const token = sessionData.session?.access_token;
+            const token = data.session?.access_token;
             if (token) {
               await fetch(`${process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1'}/referrals/apply`, {
                 method: 'POST',
@@ -52,6 +102,7 @@ export default function AuthCallbackPage() {
           }
         }
 
+        clearStored();
         if (!cancelled) router.replace(nextUrl);
       } catch (err: unknown) {
         if (!cancelled) setError(err instanceof Error ? err.message : 'Login failed');
