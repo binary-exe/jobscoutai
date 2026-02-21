@@ -20,13 +20,11 @@ export default function PricingPage() {
   const standardPrice = isWeekly ? 4 : 19;
   const standardPeriod = isWeekly ? 'per week' : 'per month';
   const standardPacks = isWeekly ? 20 : 120;
-  const standardTrackerCap = standardPacks;
   const standardPlanKey = isWeekly ? 'weekly_standard' : 'monthly_standard';
 
   const proPrice = isWeekly ? 9 : 39;
   const proPeriod = isWeekly ? 'per week' : 'per month';
   const proPacks = isWeekly ? 50 : 250;
-  const proTrackerCap = proPacks;
   const proPlanKey = isWeekly ? 'weekly_pro' : 'monthly_pro';
 
   return (
@@ -131,9 +129,7 @@ export default function PricingPage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>
-                    Track up to <strong>{standardTrackerCap}</strong> active applications
-                  </span>
+                  <span>Application tracker</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
@@ -176,9 +172,7 @@ export default function PricingPage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>
-                    Track up to <strong>{proTrackerCap}</strong> active applications
-                  </span>
+                  <span>Application tracker</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
@@ -211,7 +205,7 @@ export default function PricingPage() {
               <div className="flex items-center justify-center gap-4">
                 <span className="text-2xl font-bold">+20 packs</span>
                 <span className="text-muted-foreground">for</span>
-                <span className="text-2xl font-bold text-primary">$10</span>
+                <span className="text-2xl font-bold text-primary">$5</span>
               </div>
               <p className="text-xs text-muted-foreground mt-2">One-time purchase, never expires</p>
             </div>
