@@ -452,11 +452,11 @@ export default function AccountPage() {
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-green-500" />
-                        <span>Limited application tracker</span>
+                        <span>Application tracker</span>
                       </li>
                       <li className="flex items-center gap-2">
                         <Check className="h-4 w-4 text-green-500" />
-                        <span>DOCX exports (up to 6 / month)</span>
+                        <span>DOCX export</span>
                       </li>
                     </ul>
                   </div>

@@ -96,11 +96,11 @@ export default function PricingPage() {
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>Limited application tracker</span>
+                  <span>Application tracker</span>
                 </li>
                 <li className="flex items-start gap-2">
                   <Check className="h-4 w-4 text-primary shrink-0 mt-0.5" />
-                  <span>DOCX exports (up to 6 / month)</span>
+                  <span>DOCX export</span>
                 </li>
               </ul>
               
