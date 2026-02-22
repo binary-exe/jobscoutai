@@ -9,7 +9,7 @@ import { supabase } from '@/lib/supabase';
 function friendlyAuthError(code?: string | null, description?: string | null) {
   const c = (code || '').toLowerCase();
   const d = (description || '').trim();
-  if (c === 'otp_expired') return 'This magic link has expired. Please request a new one.';
+  if (c === 'otp_expired') return 'This sign-in link has expired. Please request a new one.';
   if (c === 'access_denied') return d || 'Access denied. Please try logging in again.';
   return d || (c ? `Login failed (${c}). Please try again.` : 'Login failed. Please try again.');
 }
@@ -79,7 +79,7 @@ export default function AuthCallbackPage() {
         // Some flows don't use the code param (or rely on URL hash parsing); ensure session exists.
         const { data } = await supabase.auth.getSession();
         if (!data.session) {
-          throw new Error('We could not complete sign-in. Please request a new magic link.');
+          throw new Error('We could not complete sign-in. Please try again.');
         }
 
         // Apply referral code if present

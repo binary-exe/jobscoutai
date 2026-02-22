@@ -12,7 +12,7 @@ export default function LoginPage() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const [email, setEmail] = useState('');
-  const [loading, setLoading] = useState(false);
+  const [loadingMethod, setLoadingMethod] = useState<'email' | 'google' | null>(null);
   const [sent, setSent] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -30,10 +30,31 @@ export default function LoginPage() {
     };
   }, [router, nextUrl]);
 
+  const persistAuthIntent = () => {
+    // Persist redirect intent locally so the callback URL stays clean.
+    // Supabase may append its own query params (code/error) and can mangle pre-existing queries.
+    try {
+      window.localStorage.setItem('jobiqueue_auth_next', nextUrl);
+      if (referralCode) {
+        window.localStorage.setItem('jobiqueue_auth_ref', referralCode);
+      } else {
+        window.localStorage.removeItem('jobiqueue_auth_ref');
+      }
+    } catch {
+      // Best-effort; continue without stored state.
+    }
+  };
+
+  const getRedirectTo = () => {
+    // Use NEXT_PUBLIC_SITE_URL if set, otherwise fall back to window.location.origin.
+    const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
+    return `${siteUrl}/auth/callback`;
+  };
+
   const handleSendMagicLink = async (e: React.FormEvent) => {
     e.preventDefault();
     setError(null);
-    setLoading(true);
+    setLoadingMethod('email');
 
     try {
       if (!isSupabaseConfigured()) {
@@ -41,22 +62,8 @@ export default function LoginPage() {
         return;
       }
 
-      // Persist redirect intent locally so the callback URL stays clean.
-      // Supabase may append its own query params (code/error) and can mangle pre-existing queries.
-      try {
-        window.localStorage.setItem('jobiqueue_auth_next', nextUrl);
-        if (referralCode) {
-          window.localStorage.setItem('jobiqueue_auth_ref', referralCode);
-        } else {
-          window.localStorage.removeItem('jobiqueue_auth_ref');
-        }
-      } catch {
-        // Best-effort; continue without stored state.
-      }
-
-      // Use NEXT_PUBLIC_SITE_URL if set, otherwise fall back to window.location.origin
-      const siteUrl = process.env.NEXT_PUBLIC_SITE_URL || window.location.origin;
-      const redirectTo = `${siteUrl}/auth/callback`;
+      persistAuthIntent();
+      const redirectTo = getRedirectTo();
 
       const { error: supaErr } = await supabase.auth.signInWithOtp({
         email,
@@ -76,7 +83,48 @@ export default function LoginPage() {
       const message = err instanceof Error ? err.message : 'Failed to send magic link';
       setError(message);
     } finally {
-      setLoading(false);
+      setLoadingMethod(null);
+    }
+  };
+
+  const handleGoogleSignIn = async () => {
+    setError(null);
+    setLoadingMethod('google');
+
+    try {
+      if (!isSupabaseConfigured()) {
+        setError('Supabase is not configured. Set NEXT_PUBLIC_SUPABASE_URL and NEXT_PUBLIC_SUPABASE_ANON_KEY.');
+        return;
+      }
+
+      persistAuthIntent();
+      const redirectTo = getRedirectTo();
+
+      const { data, error: supaErr } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo,
+          skipBrowserRedirect: true,
+        },
+      });
+
+      if (supaErr) throw supaErr;
+
+      trackSignUp('google');
+      if (referralCode) {
+        trackReferralSignup(referralCode);
+      }
+
+      if (!data?.url) {
+        throw new Error('Failed to start Google sign-in');
+      }
+
+      window.location.assign(data.url);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Failed to start Google sign-in';
+      setError(message);
+    } finally {
+      setLoadingMethod(null);
     }
   };
 
@@ -120,9 +168,35 @@ export default function LoginPage() {
                   >
                     Use a different email
                   </button>
+                  <button
+                    onClick={handleGoogleSignIn}
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm font-medium hover:bg-muted/50 disabled:opacity-60"
+                    disabled={loadingMethod !== null}
+                    type="button"
+                  >
+                    {loadingMethod === 'google' ? 'Redirecting to Google…' : 'Continue with Google instead'}
+                  </button>
                 </div>
               ) : (
                 <form onSubmit={handleSendMagicLink} className="space-y-4">
+                  <button
+                    onClick={handleGoogleSignIn}
+                    className="w-full rounded-lg border border-border bg-background px-3 py-2.5 text-sm font-medium hover:bg-muted/50 disabled:opacity-60"
+                    disabled={loadingMethod !== null}
+                    type="button"
+                  >
+                    {loadingMethod === 'google' ? 'Redirecting to Google…' : 'Continue with Google'}
+                  </button>
+
+                  <div className="relative py-1">
+                    <div className="absolute inset-0 flex items-center" aria-hidden>
+                      <div className="w-full border-t border-border" />
+                    </div>
+                    <div className="relative flex justify-center">
+                      <span className="bg-card px-2 text-xs text-muted-foreground">or continue with email</span>
+                    </div>
+                  </div>
+
                   <div>
                     <label htmlFor="email" className="block text-sm font-medium mb-1">
                       Email address
@@ -144,11 +218,11 @@ export default function LoginPage() {
                   )}
                   
                   <button
-                    disabled={loading}
+                    disabled={loadingMethod !== null}
                     className="w-full rounded-lg bg-foreground px-3 py-2.5 text-sm font-medium text-background disabled:opacity-60"
                     type="submit"
                   >
-                    {loading ? 'Sending…' : 'Continue with Email'}
+                    {loadingMethod === 'email' ? 'Sending…' : 'Continue with Email Link'}
                   </button>
                   
                   <p className="text-xs text-center text-muted-foreground">
