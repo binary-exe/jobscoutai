@@ -40,6 +40,8 @@ export interface Job {
   expires_at?: string;
   first_seen_at: string;
   last_seen_at: string;
+  relevance_score?: number;
+  relevance_reasons?: string;
   ai_score?: number;
   ai_reasons?: string;
   ai_seniority?: string;
@@ -98,7 +100,7 @@ export interface SearchParams {
   source?: string;
   posted_since?: number;
   min_score?: number;
-  sort?: 'ai_score' | 'posted_at' | 'first_seen_at' | 'personalized';
+  sort?: 'relevance_score' | 'ai_score' | 'posted_at' | 'first_seen_at' | 'personalized';
   page?: number;
   page_size?: number;
 }

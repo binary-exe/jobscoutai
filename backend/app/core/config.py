@@ -13,6 +13,56 @@ from pydantic_settings import BaseSettings
 _CORS_ENV = "JOBSCOUT_CORS_ORIGINS"
 _DEFAULT_CORS_RAW = '["http://localhost:3000","https://jobiqueue.com","https://www.jobiqueue.com","https://jobscoutai.vercel.app"]'
 
+# Scheduled query presets (broad job title lists for rotation).
+SCHEDULED_QUERIES_PRESETS: Dict[str, List[str]] = {
+    "tech_core_60": [
+        "ai automation engineer", "automation engineer", "qa automation engineer", "sdet",
+        "test automation engineer", "devops engineer", "site reliability engineer", "platform engineer",
+        "cloud engineer", "backend engineer", "full stack engineer", "frontend engineer", "software engineer",
+        "data engineer", "analytics engineer", "machine learning engineer", "mlops engineer", "ai engineer",
+        "data scientist", "security engineer", "application security engineer", "solutions engineer",
+        "sales engineer", "technical program manager", "product manager", "product designer", "ux designer",
+        "technical writer", "mobile developer", "ios developer", "android developer", "react developer",
+        "python developer", "java developer", "golang developer", "rust developer", "typescript developer",
+        "database administrator", "network engineer", "system administrator", "infrastructure engineer",
+        "quality assurance engineer", "qa engineer", "test engineer", "web developer", "full stack developer",
+        "backend developer", "frontend developer", "junior developer", "senior developer", "staff engineer",
+        "principal engineer", "engineering manager", "engineering director", "technical lead",
+        "scrum master", "agile coach", "project manager", "release engineer", "data platform engineer",
+    ],
+    "tech_plus_120": [
+        "ai automation engineer", "automation engineer", "qa automation engineer", "sdet",
+        "test automation engineer", "devops engineer", "site reliability engineer", "platform engineer",
+        "cloud engineer", "backend engineer", "full stack engineer", "frontend engineer", "software engineer",
+        "data engineer", "analytics engineer", "machine learning engineer", "mlops engineer", "ai engineer",
+        "data scientist", "security engineer", "application security engineer", "solutions engineer",
+        "sales engineer", "technical program manager", "product manager", "product designer", "ux designer",
+        "technical writer", "mobile developer", "ios developer", "android developer", "react developer",
+        "python developer", "java developer", "golang developer", "rust developer", "typescript developer",
+        "database administrator", "network engineer", "system administrator", "infrastructure engineer",
+        "quality assurance engineer", "qa engineer", "test engineer", "web developer", "full stack developer",
+        "backend developer", "frontend developer", "junior developer", "senior developer", "staff engineer",
+        "principal engineer", "engineering manager", "engineering director", "technical lead",
+        "scrum master", "agile coach", "project manager",
+        # Extended set
+        "kotlin developer", "swift developer", "nodejs developer", "ruby developer", "php developer",
+        "c sharp developer", "dotnet developer", "aws engineer", "azure engineer", "gcp engineer",
+        "kubernetes engineer", "terraform engineer", "data analyst", "business analyst", "product analyst",
+        "ux researcher", "ui designer", "graphic designer", "content writer", "copywriter",
+        "customer success manager", "account executive", "sales development representative",
+        "marketing manager", "growth engineer", "seo specialist", "digital marketing",
+        "support engineer", "technical support", "solutions architect", "system architect",
+        "embedded engineer", "firmware engineer", "hardware engineer", "robotics engineer",
+        "computer vision engineer", "nlp engineer", "research scientist", "quantitative analyst",
+        "blockchain developer", "smart contract developer", "game developer", "unity developer",
+        "unreal engine developer", "vr developer", "ar developer", "prompt engineer",
+        "ai product manager", "data architect", "cloud architect", "security analyst",
+        "penetration tester", "database engineer", "etl developer", "bi engineer",
+        "power bi developer", "tableau developer", "salesforce developer", "sap developer",
+        "qa lead", "devops architect", "observability engineer",
+    ],
+}
+
 
 def _parse_cors_origins(v: str) -> List[str]:
     """Parse CORS origins from env string (JSON or comma-separated). Never raises."""
@@ -77,6 +127,18 @@ class Settings(BaseSettings):
         """Parsed CORS origins (do not name 'cors_origins' or env JOBSCOUT_CORS_ORIGINS is matched and JSON-decoded)."""
         return _parse_cors_origins(self.cors_origins_raw)
 
+    @computed_field
+    @property
+    def resolved_scheduled_queries(self) -> List[str]:
+        """Resolved list of scheduled queries: explicit list > preset > default_search_query."""
+        queries = self.scheduled_queries if isinstance(self.scheduled_queries, list) else []
+        if queries:
+            return queries
+        preset = (self.scheduled_queries_preset or "").strip().lower()
+        if preset and preset in SCHEDULED_QUERIES_PRESETS:
+            return SCHEDULED_QUERIES_PRESETS[preset]
+        return [self.default_search_query]
+
     @field_validator("scheduled_queries", mode="before")
     @classmethod
     def parse_scheduled_queries(cls, v: Any) -> List[str]:
@@ -112,7 +174,15 @@ class Settings(BaseSettings):
     default_location: str = "Remote"
     # NOTE: Union[...] prevents pydantic-settings from crashing on non-JSON env strings.
     scheduled_queries: Union[str, List[str], None] = []
-    
+    # Preset name for scheduled queries when JOBSCOUT_SCHEDULED_QUERIES not set.
+    # Options: tech_core_60 (~60 titles), tech_plus_120 (~120 titles).
+    scheduled_queries_preset: Optional[str] = "tech_plus_120"
+    # How many queries to run per scheduler tick (rotation).
+    scheduled_queries_per_run: int = 2
+    # Scheduled scrape caps (separate from public scrape).
+    scheduled_scrape_max_results_per_source: int = 100
+    scheduled_scrape_concurrency: int = 8
+
     # Public scrape settings
     public_scrape_enabled: bool = False
     public_scrape_max_concurrent: int = 2
@@ -126,8 +196,40 @@ class Settings(BaseSettings):
     scrape_enrich_company_pages: bool = False
     scrape_max_enrichment_pages: int = 2
     
+    # SerpAPI Google Jobs (opt-in; add to JOBSCOUT_ENABLED_PROVIDERS)
+    serpapi_api_key: Optional[str] = None
+    serpapi_max_pages: int = 1
+
+    # Optional aggregator/provider credentials (all opt-in via JOBSCOUT_ENABLED_PROVIDERS)
+    themuse_api_key: Optional[str] = None
+    careerjet_api_key: Optional[str] = None
+    careerjet_locale_code: str = "en_GB"
+    careerjet_user_ip: str = "127.0.0.1"
+    careerjet_user_agent: str = "JobScoutBot/2.0"
+    adzuna_app_id: Optional[str] = None
+    adzuna_app_key: Optional[str] = None
+    adzuna_country: str = "gb"
+    findwork_api_key: Optional[str] = None
+    usajobs_api_key: Optional[str] = None
+    usajobs_user_agent: Optional[str] = None
+    reed_api_key: Optional[str] = None
+    okjob_api_key: Optional[str] = None
+    okjob_api_url: str = "https://okjob.io/api/jobs"
+    jobs2careers_api_key: Optional[str] = None
+    jobs2careers_api_url: str = "http://api.jobs2careers.com/api/jobsearch"
+    whatjobs_api_key: Optional[str] = None
+    whatjobs_api_url: str = "https://api.whatjobs.com/api/v1/jobs"
+    juju_api_key: Optional[str] = None
+    juju_api_url: str = "http://www.juju.com/publisher/jobs/"
+    arbeitsamt_client_id: Optional[str] = None
+    arbeitsamt_client_secret: Optional[str] = None
+    arbeitsamt_token_url: str = "https://rest.arbeitsagentur.de/oauth/gettoken_cc"
+    arbeitsamt_api_url: str = "https://rest.arbeitsagentur.de/jobboerse/jobsuche-service/pc/v4/app/jobs"
+    # Optional taxonomy expansion (not a job feed).
+    open_skills_api_url: Optional[str] = None
+
     # Enabled providers (optional allowlist). If empty => use all built-in providers.
-    # Default to stable sources: remotive, remoteok, arbeitnow, weworkremotely
+    # Default: all built-in providers. Providers that need API keys will no-op until keys are set.
     # NOTE: Union[...] prevents pydantic-settings from crashing on non-JSON env strings.
     enabled_providers: Union[str, List[str], None] = [
         "remotive",
@@ -135,6 +237,26 @@ class Settings(BaseSettings):
         "arbeitnow",
         "weworkremotely",
         "workingnomads",
+        "remoteco",
+        "justremote",
+        "wellfound",
+        "stackoverflow",
+        "indeed",
+        "flexjobs",
+        "serpapi_google_jobs",
+        "jobicy",
+        "devitjobs_uk",
+        "themuse",
+        "careerjet",
+        "adzuna",
+        "findwork",
+        "usajobs",
+        "reed",
+        "okjob",
+        "jobs2careers",
+        "whatjobs",
+        "juju",
+        "arbeitsamt",
     ]
 
     @field_validator("enabled_providers", mode="before")

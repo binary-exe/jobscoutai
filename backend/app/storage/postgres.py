@@ -58,6 +58,10 @@ CREATE TABLE IF NOT EXISTS jobs (
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
 
+    -- Deterministic relevance fields (non-AI)
+    relevance_score REAL,
+    relevance_reasons TEXT,
+
     -- AI fields
     ai_score REAL,
     ai_reasons TEXT,
@@ -73,12 +77,17 @@ CREATE TABLE IF NOT EXISTS jobs (
     ai_flags TEXT[] DEFAULT '{}'
 );
 
+-- Additive migrations for existing installs (idempotent)
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS relevance_score REAL;
+ALTER TABLE jobs ADD COLUMN IF NOT EXISTS relevance_reasons TEXT;
+
 -- Indexes for common queries
 CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_normalized);
 CREATE INDEX IF NOT EXISTS idx_jobs_remote_type ON jobs(remote_type);
 CREATE INDEX IF NOT EXISTS idx_jobs_posted_at ON jobs(posted_at DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_jobs_first_seen ON jobs(first_seen_at DESC);
+CREATE INDEX IF NOT EXISTS idx_jobs_relevance_score ON jobs(relevance_score DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_jobs_ai_score ON jobs(ai_score DESC NULLS LAST);
 CREATE INDEX IF NOT EXISTS idx_jobs_search ON jobs USING gin(to_tsvector('english', title || ' ' || company || ' ' || COALESCE(description_text, '')));
 
@@ -278,7 +287,9 @@ async def upsert_job_from_dict(
                 ai_tech_stack = COALESCE($42, ai_tech_stack),
                 ai_company_domain = COALESCE($43, ai_company_domain),
                 ai_company_summary = COALESCE($44, ai_company_summary),
-                ai_flags = COALESCE($45, ai_flags)
+                ai_flags = COALESCE($45, ai_flags),
+                relevance_score = COALESCE($46, relevance_score),
+                relevance_reasons = COALESCE($47, relevance_reasons)
             WHERE job_id = $1
         """,
             job["job_id"],
@@ -326,6 +337,8 @@ async def upsert_job_from_dict(
             job.get("ai_company_domain"),
             job.get("ai_company_summary"),
             parse_array(job.get("ai_flags")),
+            job.get("relevance_score"),
+            job.get("relevance_reasons"),
         )
         return False, True
     else:
@@ -345,13 +358,14 @@ async def upsert_job_from_dict(
                 posted_at, expires_at, first_seen_at, last_seen_at,
                 ai_score, ai_reasons, ai_remote_type, ai_employment_types,
                 ai_seniority, ai_confidence, ai_summary, ai_requirements,
-                ai_tech_stack, ai_company_domain, ai_company_summary, ai_flags
+                ai_tech_stack, ai_company_domain, ai_company_summary, ai_flags,
+                relevance_score, relevance_reasons
             ) VALUES (
                 $1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
                 $11, $12, $13, $14, $15, $16, $17, $18, $19, $20,
                 $21, $22, $23, $24, $25, $26, $27, $28, $29, $30,
                 $31, $32, $33, $34, $35, $36, $37, $38, $39, $40,
-                $41, $42, $43, $44, $45, $46
+                $41, $42, $43, $44, $45, $46, $47, $48
             )
         """,
             job["job_id"],
@@ -400,6 +414,8 @@ async def upsert_job_from_dict(
             job.get("ai_company_domain"),
             job.get("ai_company_summary"),
             parse_array(job.get("ai_flags")),
+            job.get("relevance_score"),
+            job.get("relevance_reasons"),
         )
         return True, False
 

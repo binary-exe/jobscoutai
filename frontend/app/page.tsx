@@ -32,7 +32,7 @@ export default async function HomePage({ searchParams }: PageProps) {
     remote: searchParams.remote,
     employment: searchParams.employment,
     posted_since: searchParams.posted_since ? parseInt(searchParams.posted_since) : undefined,
-    sort: (searchParams.sort as SearchParams['sort']) || 'ai_score',
+    sort: (searchParams.sort as SearchParams['sort']) || 'relevance_score',
     page: searchParams.page ? parseInt(searchParams.page) : 1,
     page_size: 20,
   };

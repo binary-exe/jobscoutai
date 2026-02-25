@@ -32,6 +32,50 @@ router = APIRouter(prefix="/apply", tags=["apply"])
 
 APPLY_PACK_CREDITS = 10
 APPLY_PACK_REVIEW_CREDITS = 2
+APPLY_PACK_CACHE_VERSION = "v2_ai_only"
+
+_AI_PROVIDER_OUTAGE_MARKERS = (
+    "insufficient_quota",
+    "error code: 429",
+    "rate limit",
+    "rate_limit",
+    "too many requests",
+    "temporarily unavailable",
+    "billing",
+    "credit balance",
+    "timeout",
+    "timed out",
+    "connection",
+    "network",
+)
+
+
+def _is_ai_provider_outage(message: str) -> bool:
+    msg = (message or "").lower()
+    return any(marker in msg for marker in _AI_PROVIDER_OUTAGE_MARKERS)
+
+
+def _map_ai_runtime_error(*, feature_label: str, message: str) -> HTTPException:
+    msg = (message or "").lower()
+    if _is_ai_provider_outage(msg):
+        return HTTPException(
+            status_code=503,
+            detail=(
+                "AI provider is temporarily unavailable due to upstream quota/capacity. "
+                "Please try again shortly."
+            ),
+        )
+
+    if any(marker in msg for marker in ("malformed", "invalid", "empty")):
+        return HTTPException(
+            status_code=502,
+            detail=f"{feature_label} returned an invalid AI response. Please try again.",
+        )
+
+    return HTTPException(
+        status_code=502,
+        detail=f"{feature_label} failed. Please try again.",
+    )
 
 # python-multipart is required by FastAPI for UploadFile/File(...) endpoints.
 # In misconfigured dev environments, FastAPI raises at import time, which prevents the whole API from starting.
@@ -1170,7 +1214,8 @@ async def generate_apply_pack(
             str(request.job_url) if request.job_url else None,
             request.job_text
         )
-        pack_hash = apply_storage.hash_apply_pack(resume_hash, job_hash)
+        pack_hash_input = f"{APPLY_PACK_CACHE_VERSION}:{job_hash}" if request.use_ai else job_hash
+        pack_hash = apply_storage.hash_apply_pack(resume_hash, pack_hash_input)
 
         # Check if apply pack already exists (cached)
         existing_pack = await apply_storage.get_apply_pack_by_hash(conn, user_id, pack_hash)
@@ -1233,9 +1278,22 @@ async def generate_apply_pack(
         
         # Get or create resume
         resume = await apply_storage.get_resume_by_hash(conn, user_id, resume_hash)
+        resume_analysis = None
+        if request.use_ai:
+            try:
+                resume_analysis = await resume_analyzer.analyze_resume(request.resume_text, use_ai=True)
+            except RuntimeError as e:
+                raise _map_ai_runtime_error(feature_label="Resume AI analysis", message=str(e))
+
         if not resume:
-            # Analyze resume first
-            resume_analysis = await resume_analyzer.analyze_resume(request.resume_text, use_ai=request.use_ai)
+            # Analyze resume first (AI-required or heuristic based on request.use_ai)
+            if resume_analysis is None:
+                try:
+                    resume_analysis = await resume_analyzer.analyze_resume(
+                        request.resume_text, use_ai=request.use_ai
+                    )
+                except RuntimeError as e:
+                    raise _map_ai_runtime_error(feature_label="Resume analysis", message=str(e))
             
             resume = await apply_storage.create_resume_version(
                 conn,
@@ -1267,11 +1325,12 @@ async def generate_apply_pack(
             elif bullets is None:
                 bullets = []
             
-            resume_analysis = {
-                "skills": skills,
-                "seniority": resume.get("extracted_seniority") or "mid",
-                "bullets": bullets,
-            }
+            if resume_analysis is None:
+                resume_analysis = {
+                    "skills": skills,
+                    "seniority": resume.get("extracted_seniority") or "mid",
+                    "bullets": bullets,
+                }
         
         # Get or create job target
         job_hash = apply_storage.hash_job_target(
@@ -1279,6 +1338,7 @@ async def generate_apply_pack(
             request.job_text
         )
         job_target = await apply_storage.get_job_target_by_hash(conn, job_hash)
+        job_analysis = None
         if not job_target:
             # Parse job if needed
             if request.job_url:
@@ -1291,10 +1351,13 @@ async def generate_apply_pack(
                 job_data = job_parser.parse_job_text(request.job_text)
             
             # Analyze job
-            job_analysis = await job_analyzer.analyze_job(
-                job_data.get("description_text", request.job_text),
-                use_ai=request.use_ai
-            )
+            try:
+                job_analysis = await job_analyzer.analyze_job(
+                    job_data.get("description_text", request.job_text),
+                    use_ai=request.use_ai
+                )
+            except RuntimeError as e:
+                raise _map_ai_runtime_error(feature_label="Job AI analysis", message=str(e))
             
             job_target = await apply_storage.create_job_target(
                 conn,
@@ -1331,11 +1394,20 @@ async def generate_apply_pack(
             elif keywords is None:
                 keywords = []
             
-            job_analysis = {
-                "must_haves": must_haves,
-                "keywords": keywords,
-                "rubric": job_target.get("role_rubric") or "",
-            }
+            if request.use_ai:
+                try:
+                    job_analysis = await job_analyzer.analyze_job(
+                        (job_target.get("description_text") or request.job_text or ""),
+                        use_ai=True,
+                    )
+                except RuntimeError as e:
+                    raise _map_ai_runtime_error(feature_label="Job AI analysis", message=str(e))
+            else:
+                job_analysis = {
+                    "must_haves": must_haves,
+                    "keywords": keywords,
+                    "rubric": job_target.get("role_rubric") or "",
+                }
         
         # Extract company info from job_target (including from extracted_json for JobScout imports)
         import json
@@ -1363,18 +1435,21 @@ async def generate_apply_pack(
                 print(f"Warning: Failed to build learning summary: {e}")
         
         # Generate apply pack
-        pack_data = await apply_pack_generator.generate_apply_pack(
-            resume_text=request.resume_text,
-            resume_analysis=resume_analysis,
-            job_description=job_target.get("description_text", request.job_text or ""),
-            job_analysis=job_analysis,
-            use_ai=request.use_ai,
-            job_title=job_title,
-            company_name=company_name,
-            company_summary=company_summary,
-            company_website=company_website,
-            learning_context=learning_context,
-        )
+        try:
+            pack_data = await apply_pack_generator.generate_apply_pack(
+                resume_text=request.resume_text,
+                resume_analysis=resume_analysis,
+                job_description=(job_target.get("description_text") or request.job_text or ""),
+                job_analysis=job_analysis,
+                use_ai=request.use_ai,
+                job_title=job_title,
+                company_name=company_name,
+                company_summary=company_summary,
+                company_website=company_website,
+                learning_context=learning_context,
+            )
+        except RuntimeError as e:
+            raise _map_ai_runtime_error(feature_label="Apply pack generation", message=str(e))
 
         # Optional premium-only reviewer loop (advanced model reviews, cheap model revises)
         review_used = False

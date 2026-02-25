@@ -144,7 +144,7 @@ async def generate_apply_pack(
     # Use AI for generation
     settings = get_settings()
     if not settings.openai_api_key:
-        return _generate_basic_pack(resume_analysis, job_analysis, job_title=job_title, company_name=company_name)
+        raise RuntimeError("AI apply pack generation is unavailable: OpenAI key is not configured.")
     
     try:
         from jobscout.llm.provider import LLMConfig, get_llm_client
@@ -158,7 +158,7 @@ async def generate_apply_pack(
         
         client = get_llm_client(llm_config)
         if not client:
-            return _generate_basic_pack(resume_analysis, job_analysis)
+            raise RuntimeError("AI apply pack generation is unavailable: LLM client initialization failed.")
         
         # Generate tailored summary (with learning context)
         summary = await _generate_summary(
@@ -227,7 +227,9 @@ async def generate_apply_pack(
         
     except Exception as e:
         print(f"Error in AI apply pack generation: {e}")
-        return _generate_basic_pack(resume_analysis, job_analysis)
+        if isinstance(e, RuntimeError):
+            raise
+        raise RuntimeError(f"AI apply pack generation failed: {str(e)}")
 
 
 async def _generate_summary(

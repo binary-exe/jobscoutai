@@ -60,6 +60,29 @@ def _hash_profile(payload: dict[str, Any]) -> str:
     return hashlib.sha256(stable.encode("utf-8")).hexdigest()
 
 
+def _map_ai_runtime_error(message: str) -> HTTPException:
+    msg = (message or "").lower()
+    outage_markers = (
+        "insufficient_quota",
+        "error code: 429",
+        "rate limit",
+        "rate_limit",
+        "too many requests",
+        "temporarily unavailable",
+        "billing",
+        "credit balance",
+    )
+    if any(marker in msg for marker in outage_markers):
+        return HTTPException(
+            status_code=503,
+            detail=(
+                "AI provider is temporarily unavailable due to upstream quota/capacity. "
+                "Please try again shortly."
+            ),
+        )
+    return HTTPException(status_code=502, detail="Resume AI analysis failed. Please try again.")
+
+
 @router.get("")
 async def get_profile(user: AuthUser = Depends(get_current_user)):
     async with db.connection() as conn:
@@ -112,7 +135,10 @@ async def create_resume_from_text(request: ResumeTextRequest, user: AuthUser = D
     if not resume_text:
         raise HTTPException(status_code=400, detail="resume_text is required")
 
-    analysis = await resume_analyzer.analyze_resume(resume_text, use_ai=request.use_ai)
+    try:
+        analysis = await resume_analyzer.analyze_resume(resume_text, use_ai=request.use_ai)
+    except RuntimeError as e:
+        raise _map_ai_runtime_error(str(e))
 
     async with db.connection() as conn:
         await conn.execute(
@@ -152,7 +178,10 @@ if _HAS_MULTIPART:
         if not resume_text:
             raise HTTPException(status_code=400, detail="Could not extract text from resume")
 
-        analysis = await resume_analyzer.analyze_resume(resume_text, use_ai=True)
+        try:
+            analysis = await resume_analyzer.analyze_resume(resume_text, use_ai=True)
+        except RuntimeError as e:
+            raise _map_ai_runtime_error(str(e))
 
         async with db.connection() as conn:
             await conn.execute(

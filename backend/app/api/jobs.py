@@ -42,6 +42,10 @@ class JobResponse(BaseModel):
     first_seen_at: datetime
     last_seen_at: datetime
 
+    # Deterministic relevance fields (non-AI)
+    relevance_score: Optional[float] = None
+    relevance_reasons: Optional[str] = None
+
     # AI fields
     ai_score: Optional[float] = None
     ai_reasons: Optional[str] = None
@@ -81,7 +85,7 @@ async def list_jobs(
     source: Optional[str] = Query(None, description="Source filter"),
     posted_since: Optional[int] = Query(None, description="Posted within N days"),
     min_score: Optional[float] = Query(None, description="Minimum AI score (0-100)"),
-    sort: str = Query("ai_score", description="Sort by: ai_score, posted_at, first_seen_at, personalized"),
+    sort: str = Query("relevance_score", description="Sort by: relevance_score, ai_score, posted_at, first_seen_at, personalized"),
     page: int = Query(1, ge=1),
     page_size: int = Query(20, ge=1, le=50),
     settings: Settings = Depends(get_settings),
@@ -166,11 +170,12 @@ async def _list_jobs_sqlite(
 
     # Sort
     sort_map = {
-        "ai_score": "COALESCE(ai_score, 0) DESC",
-        "posted_at": "posted_at DESC NULLS LAST",
+        "relevance_score": "COALESCE(relevance_score, 0) DESC, posted_at DESC NULLS LAST, first_seen_at DESC",
+        "ai_score": "COALESCE(ai_score, 0) DESC, posted_at DESC NULLS LAST, first_seen_at DESC",
+        "posted_at": "posted_at DESC NULLS LAST, first_seen_at DESC",
         "first_seen_at": "first_seen_at DESC",
     }
-    order_sql = sort_map.get(sort, "COALESCE(ai_score, 0) DESC")
+    order_sql = sort_map.get(sort, "COALESCE(relevance_score, 0) DESC")
 
     # Count
     count_sql = f"SELECT COUNT(*) FROM jobs WHERE {where_sql}"
@@ -344,11 +349,12 @@ async def _list_jobs_postgres(
             order_sql = f"(embedding <=> ${personalized_param_idx}::vector) ASC NULLS LAST, posted_at DESC NULLS LAST"
         else:
             sort_map = {
-                "ai_score": "COALESCE(ai_score, 0) DESC",
-                "posted_at": "posted_at DESC NULLS LAST",
+                "relevance_score": "COALESCE(relevance_score, 0) DESC, posted_at DESC NULLS LAST, first_seen_at DESC",
+                "ai_score": "COALESCE(ai_score, 0) DESC, posted_at DESC NULLS LAST, first_seen_at DESC",
+                "posted_at": "posted_at DESC NULLS LAST, first_seen_at DESC",
                 "first_seen_at": "first_seen_at DESC",
             }
-            order_sql = sort_map.get(sort, "COALESCE(ai_score, 0) DESC")
+            order_sql = sort_map.get(sort, "COALESCE(relevance_score, 0) DESC")
 
         # Count
         count_sql = f"SELECT COUNT(*) FROM jobs WHERE {where_sql}"
@@ -423,6 +429,8 @@ def _row_to_job_response(row: dict) -> JobResponse:
         posted_at=row.get("posted_at"),
         first_seen_at=row.get("first_seen_at"),
         last_seen_at=row.get("last_seen_at"),
+        relevance_score=row.get("relevance_score"),
+        relevance_reasons=row.get("relevance_reasons"),
         ai_score=row.get("ai_score"),
         ai_reasons=row.get("ai_reasons"),
         ai_seniority=row.get("ai_seniority"),
@@ -469,6 +477,8 @@ def _record_to_job_response(row) -> JobResponse:
         posted_at=row.get("posted_at"),
         first_seen_at=row.get("first_seen_at"),
         last_seen_at=row.get("last_seen_at"),
+        relevance_score=row.get("relevance_score"),
+        relevance_reasons=row.get("relevance_reasons"),
         ai_score=row.get("ai_score"),
         ai_reasons=row.get("ai_reasons"),
         ai_seniority=row.get("ai_seniority"),

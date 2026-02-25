@@ -28,7 +28,7 @@ async def analyze_job(description_text: str, use_ai: bool = True) -> Dict[str, A
     # Use AI for structured extraction
     settings = get_settings()
     if not settings.openai_api_key:
-        return _extract_job_heuristic(description_text)
+        raise RuntimeError("AI job analysis is unavailable: OpenAI key is not configured.")
     
     try:
         from jobscout.llm.provider import LLMConfig, get_llm_client
@@ -42,7 +42,7 @@ async def analyze_job(description_text: str, use_ai: bool = True) -> Dict[str, A
         
         client = get_llm_client(llm_config)
         if not client:
-            return _extract_job_heuristic(description_text)
+            raise RuntimeError("AI job analysis is unavailable: LLM client initialization failed.")
         
         system_prompt = """You are a job analysis expert. Extract key information from job descriptions.
 Return valid JSON only."""
@@ -71,11 +71,13 @@ Return JSON in this format:
                 "rubric": response.json_data.get("rubric", ""),
             }
         
-        return _extract_job_heuristic(description_text)
+        raise RuntimeError(response.error or "AI job analysis returned no structured data.")
         
     except Exception as e:
         print(f"Error in AI job analysis: {e}")
-        return _extract_job_heuristic(description_text)
+        if isinstance(e, RuntimeError):
+            raise
+        raise RuntimeError(f"AI job analysis failed: {str(e)}")
 
 
 def _extract_job_heuristic(description_text: str) -> Dict[str, Any]:

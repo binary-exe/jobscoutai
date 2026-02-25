@@ -8,13 +8,15 @@
 
 ## ✨ Features
 
-- **Multi-source aggregation**: Scrapes Remotive, RemoteOK, WeWorkRemotely, Greenhouse, Lever, Ashby, Recruitee, and more
-- **Intelligent discovery**: Auto-discovers company job boards via search
+- **Multi-source aggregation**: 25+ built-in providers (Remotive, RemoteOK, WeWorkRemotely, Jobicy, DevITjobs UK, SerpAPI Google Jobs, TheMuse, Findwork, Reed, Adzuna, USAJobs, and more), plus discovery for Greenhouse, Lever, Ashby, Recruitee
+- **Intelligent discovery**: Auto-discovers company job boards via search (optional)
 - **AI ranking**: GPT-4 scores jobs by relevance to your search
 - **Smart deduplication**: Multi-layer fuzzy matching with LLM arbitration
 - **Rich extraction**: Company info, salaries, tech stacks, and contact emails
+- **Apply Workspace**: AI-tailored cover letters, trust reports, and application tracking (auth via Supabase)
 - **Beautiful UI**: Notion/Apple-inspired minimal design
 - **Shareable URLs**: Filter state encoded in URL for bookmarking
+- **Scheduled scrapes**: Rotation over 60–120 job titles, configurable queries per run
 - **Cost-optimized**: Caching, batching, and configurable limits
 
 ---
@@ -55,16 +57,17 @@
 git clone https://github.com/binary-exe/jobscoutai.git
 cd jobscoutai
 
-# Backend
+# Backend (from repo root)
 cd backend
 pip install -r requirements.txt
-cp env.sample .env  # Edit with your settings
-uvicorn backend.app.main:app --reload
+pip install -e ../   # Install jobscout package in dev mode
+cp env.sample .env   # Edit with your settings
+uvicorn backend.app.main:app --reload --host 0.0.0.0 --port 8000
 
 # Frontend (new terminal)
 cd frontend
 npm install
-cp env.sample .env.local  # Edit with API URL
+cp env.sample .env.local  # Set NEXT_PUBLIC_API_URL=http://localhost:8000/api/v1
 npm run dev
 ```
 
@@ -98,10 +101,10 @@ See [DEPLOY.md](./DEPLOY.md) for full deployment instructions.
 
 **Quick deploy:**
 
-1. **Database**: Create free Supabase project, run schema SQL (use Session pooler connection string)
-2. **Backend**: Deploy to Fly.io with `fly deploy -a jobscout-api`
-3. **Frontend**: Deploy to Vercel with `npx vercel --prod`
-4. **Scrapes**: Built-in APScheduler runs automatically on Fly.io (every 6 hours by default)
+1. **Database**: Create free Supabase project, run schema SQL (use **Session pooler** connection string)
+2. **Backend**: From repo root, `fly deploy -a jobscout-api`; set secrets (e.g. `JOBSCOUT_DATABASE_URL`, `JOBSCOUT_ADMIN_TOKEN`, provider API keys) via `fly secrets set`
+3. **Frontend**: From **repo root**, `npx vercel --prod` (Vercel config is at root). Production: [jobiqueue.com](https://jobiqueue.com)
+4. **Scrapes**: APScheduler on Fly.io runs scheduled scrapes (preset `tech_plus_120` or `tech_core_60`; rotation over 60–120 titles every 6 hours by default)
 
 **Estimated cost: $0-5/month**
 
@@ -168,13 +171,18 @@ When enabled (`--ai` flag or `JOBSCOUT_AI_ENABLED=true`), the AI pipeline:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `JOBSCOUT_DATABASE_URL` | Postgres connection string | - |
-| `JOBSCOUT_USE_SQLITE` | Use SQLite instead | `false` |
-| `JOBSCOUT_ADMIN_TOKEN` | Token for `/admin/run` | - |
-| `JOBSCOUT_OPENAI_API_KEY` | OpenAI API key | - |
-| `JOBSCOUT_AI_ENABLED` | Enable AI features | `false` |
-| `JOBSCOUT_AI_MAX_JOBS` | Max jobs for AI | `50` |
-| `JOBSCOUT_SCRAPE_INTERVAL_HOURS` | Auto-scrape interval | `6` |
+| `JOBSCOUT_DATABASE_URL` | Postgres connection string (use Supabase Session pooler) | - |
+| `JOBSCOUT_USE_SQLITE` | Use SQLite instead of Postgres | `false` |
+| `JOBSCOUT_ADMIN_TOKEN` | Token for `POST /admin/run` | - |
+| `JOBSCOUT_ENABLED_PROVIDERS` | Comma-separated allowlist; omit for all 25 providers | (all) |
+| `JOBSCOUT_OPENAI_API_KEY` | OpenAI API key (optional, for AI ranking/enrichment) | - |
+| `JOBSCOUT_AI_ENABLED` | Enable AI features | `true` |
+| `JOBSCOUT_AI_MAX_JOBS` | Max jobs for AI pipeline | `50` |
+| `JOBSCOUT_SCRAPE_INTERVAL_HOURS` | Scheduled scrape interval | `6` |
+| `JOBSCOUT_SCHEDULED_QUERIES_PRESET` | Preset: `tech_core_60` or `tech_plus_120` | `tech_plus_120` |
+| `JOBSCOUT_PUBLIC_SCRAPE_ENABLED` | Allow public `POST /scrape` (rate-limited) | `false` |
+
+Full list and provider-specific keys (SerpAPI, Adzuna, Findwork, USAJobs, Reed, etc.) are in `backend/env.sample`.
 
 ---
 
@@ -231,17 +239,30 @@ Features:
 
 ## 📈 Data Sources
 
-| Source | Type | Notes |
-|--------|------|-------|
-| Remotive | API | No auth required |
-| RemoteOK | API | No auth required |
-| Arbeitnow | API | No auth required |
-| WeWorkRemotely | RSS | No auth required |
-| Greenhouse | API | Discovered via search |
-| Lever | API | Discovered via search |
-| Ashby | API | Discovered via search |
-| Recruitee | API | Discovered via search |
-| Schema.org | Scraping | Generic job sites |
+**No API key required** (work out of the box):
+
+| Source | Type |
+|--------|------|
+| Remotive, RemoteOK, Arbeitnow, WeWorkRemotely, WorkingNomads | API / RSS |
+| Remoteco, JustRemote, Jobicy, DevITjobs UK | RSS / feeds |
+| Wellfound, Stack Overflow, Indeed, FlexJobs | RSS (some may 403 from server IPs) |
+| TheMuse | API (optional key for richer results) |
+| Greenhouse, Lever, Ashby, Recruitee, Schema.org | Discovery or scraping |
+
+**API key (or app id/key) required** — set in Fly secrets or `.env`; see `backend/env.sample`:
+
+| Provider | Env vars |
+|----------|----------|
+| SerpAPI Google Jobs | `JOBSCOUT_SERPAPI_API_KEY` |
+| Careerjet | `JOBSCOUT_CAREERJET_API_KEY` |
+| Adzuna | `JOBSCOUT_ADZUNA_APP_ID`, `JOBSCOUT_ADZUNA_APP_KEY` |
+| Findwork | `JOBSCOUT_FINDWORK_API_KEY` |
+| USAJobs | `JOBSCOUT_USAJOBS_API_KEY`, `JOBSCOUT_USAJOBS_USER_AGENT` |
+| Reed | `JOBSCOUT_REED_API_KEY` |
+| Jobs2Careers, WhatJobs, Juju | Respective `JOBSCOUT_*_API_KEY` |
+| Arbeitsamt | `JOBSCOUT_ARBEITSAMT_CLIENT_ID`, `JOBSCOUT_ARBEITSAMT_CLIENT_SECRET` |
+
+Default: all built-in providers are enabled; those without keys simply return 0 jobs until configured.
 
 ---
 

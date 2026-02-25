@@ -22,6 +22,7 @@ const REMOTE_STYLES = {
 export function JobCard({ job, nowIso, className }: JobCardProps) {
   const salary = formatSalary(job.salary_min, job.salary_max, job.salary_currency);
   const hasFlags = job.ai_flags && job.ai_flags.length > 0;
+  const matchScore = job.relevance_score ?? job.ai_score;
   
   return (
     <Link
@@ -46,16 +47,16 @@ export function JobCard({ job, nowIso, className }: JobCardProps) {
           </div>
         </div>
         
-        {/* AI Score */}
-        {job.ai_score !== undefined && job.ai_score !== null && (
+        {/* Match score */}
+        {matchScore !== undefined && matchScore !== null && (
           <div className={cn(
             "flex items-center gap-1 rounded-lg px-2 py-1",
-            job.ai_score >= 70 ? "bg-remote-light text-remote" :
-            job.ai_score >= 40 ? "bg-hybrid-light text-hybrid" :
+            matchScore >= 70 ? "bg-remote-light text-remote" :
+            matchScore >= 40 ? "bg-hybrid-light text-hybrid" :
             "bg-muted text-muted-foreground"
           )}>
             <Star className="h-3.5 w-3.5" />
-            <span className="text-sm font-medium">{Math.round(job.ai_score)}</span>
+            <span className="text-sm font-medium">{Math.round(matchScore)}</span>
           </div>
         )}
       </div>

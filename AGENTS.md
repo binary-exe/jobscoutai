@@ -509,7 +509,7 @@ jobscout/
   - Enrichment
   - AI pipeline (optional)
   - Storage
-- **Built-in providers** (registry in `run_scrape()`): `remotive`, `remoteok`, `arbeitnow`, `weworkremotely`, `workingnomads`, `remoteco`, `justremote`, `wellfound`, `stackoverflow`, `indeed`, `flexjobs`. Discovery can add Lever, Greenhouse, Ashby, Recruitee, SchemaOrg. Use `JOBSCOUT_ENABLED_PROVIDERS` (comma-separated) to allowlist which sources run (e.g. `remotive,remoteok,arbeitnow,weworkremotely` for stable/low-risk only).
+- **Built-in providers** (registry in `run_scrape()`): `remotive`, `remoteok`, `arbeitnow`, `weworkremotely`, `workingnomads`, `remoteco`, `justremote`, `wellfound`, `stackoverflow`, `indeed`, `flexjobs`, `serpapi_google_jobs`, `jobicy`, `devitjobs_uk`, `themuse`, `careerjet`, `adzuna`, `findwork`, `usajobs`, `reed`, `okjob`, `jobs2careers`, `whatjobs`, `juju`, `arbeitsamt`. Discovery can add Lever, Greenhouse, Ashby, Recruitee, SchemaOrg. Use `JOBSCOUT_ENABLED_PROVIDERS` (comma-separated) to allowlist which sources run (e.g. `remotive,remoteok,arbeitnow,weworkremotely` for stable/low-risk only).
 - **Bounded collection**: `Criteria.max_results_per_source` and `Criteria.max_search_results` cap jobs per source and total; discovery uses `max_discovered_ats_tokens` to keep ATS expansion bounded.
 
 #### `jobscout/providers/base.py`
@@ -666,6 +666,10 @@ CREATE TABLE jobs (
     expires_at TIMESTAMPTZ,
     first_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
     last_seen_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+
+    -- Deterministic relevance fields (nullable; non-AI)
+    relevance_score REAL,                 -- 0-100 heuristic relevance score
+    relevance_reasons TEXT,
     
     -- AI fields (nullable)
     ai_score REAL,                        -- 0-100 relevance score
@@ -687,6 +691,7 @@ CREATE INDEX idx_jobs_company ON jobs(company_normalized);
 CREATE INDEX idx_jobs_remote_type ON jobs(remote_type);
 CREATE INDEX idx_jobs_posted_at ON jobs(posted_at DESC NULLS LAST);
 CREATE INDEX idx_jobs_first_seen ON jobs(first_seen_at DESC);
+CREATE INDEX idx_jobs_relevance_score ON jobs(relevance_score DESC NULLS LAST);
 CREATE INDEX idx_jobs_ai_score ON jobs(ai_score DESC NULLS LAST);
 CREATE INDEX idx_jobs_search ON jobs USING gin(to_tsvector('english', title || ' ' || company || ' ' || COALESCE(description_text, '')));
 ```
@@ -744,7 +749,7 @@ JOBSCOUT_DEFAULT_SEARCH_QUERY=automation engineer
 JOBSCOUT_DEFAULT_LOCATION=Remote
 JOBSCOUT_SCRAPE_INTERVAL_HOURS=6
 JOBSCOUT_SCHEDULED_QUERIES='["automation engineer","data engineer"]'  # Optional: multiple queries for scheduled scrapes
-JOBSCOUT_ENABLED_PROVIDERS=remotive,remoteok,arbeitnow,weworkremotely  # Optional: provider allowlist (defaults to stable sources)
+JOBSCOUT_ENABLED_PROVIDERS=remotive,remoteok,arbeitnow,weworkremotely  # Optional: provider allowlist (defaults to stable sources; add aggregators explicitly)
 
 # AI (optional)
 JOBSCOUT_OPENAI_API_KEY=sk-...

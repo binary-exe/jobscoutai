@@ -336,6 +336,10 @@ class NormalizedJob:
     founder: str = ""
     raw_data: Dict[str, Any] = field(default_factory=dict)
 
+    # Deterministic relevance fields (non-AI)
+    relevance_score: Optional[float] = None  # 0-100 relevance score (heuristic)
+    relevance_reasons: str = ""  # Brief explanation (best-effort)
+
     # AI-derived fields (populated when --ai is enabled)
     ai_score: Optional[float] = None  # 0-100 relevance score
     ai_reasons: str = ""  # Brief explanation of score

@@ -219,10 +219,17 @@ class HttpFetcher:
         allow_redirects: bool = True,
         max_redirects: int = 10,
         method: str = "GET",
+        data: Any = None,
+        json_body: Any = None,
     ) -> FetchResult:
         """
         Fetch a URL with retries and backoff.
         """
+        method = (method or "GET").upper()
+        # Cache only idempotent GET requests without payload.
+        if method != "GET" or data is not None or json_body is not None:
+            use_cache = False
+
         # Check cache first
         if use_cache and self.cache:
             cached = self.cache.get(url)
@@ -245,6 +252,8 @@ class HttpFetcher:
                     url,
                     timeout=timeout,
                     headers=headers,
+                    data=data,
+                    json=json_body,
                     allow_redirects=allow_redirects,
                     max_redirects=max_redirects,
                 ) as resp:
@@ -319,7 +328,7 @@ class HttpFetcher:
                     )
 
                     # Cache successful responses
-                    if use_cache and self.cache and result.ok:
+                    if use_cache and self.cache and result.ok and method == "GET":
                         self.cache.set(result)
 
                     return result

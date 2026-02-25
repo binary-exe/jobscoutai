@@ -28,7 +28,8 @@ const TIME_OPTIONS = [
 
 const SORT_OPTIONS = [
   { value: 'personalized', label: 'Personalized' },
-  { value: 'ai_score', label: 'Best match' },
+  { value: 'relevance_score', label: 'Best match' },
+  { value: 'ai_score', label: 'AI match' },
   { value: 'posted_at', label: 'Most recent' },
   { value: 'first_seen_at', label: 'Newest' },
 ];
@@ -67,7 +68,7 @@ export function Filters({ className }: FiltersProps) {
   const currentRemote = searchParams.get('remote') || '';
   const currentEmployment = searchParams.get('employment') || '';
   const currentPostedSince = searchParams.get('posted_since') || '';
-  const currentSort = searchParams.get('sort') || 'ai_score';
+  const currentSort = searchParams.get('sort') || 'relevance_score';
   
   const updateFilter = useCallback((key: string, value: string) => {
     const params = new URLSearchParams(searchParams.toString());

@@ -63,8 +63,7 @@ async def analyze_resume(resume_text: str, use_ai: bool = True) -> Dict[str, Any
     # Use AI for structured extraction
     settings = get_settings()
     if not settings.openai_api_key:
-        # Fallback to heuristic if AI not configured
-        return _extract_resume_heuristic(resume_text)
+        raise RuntimeError("AI resume analysis is unavailable: OpenAI key is not configured.")
     
     try:
         from jobscout.llm.provider import LLMConfig, get_llm_client
@@ -78,7 +77,7 @@ async def analyze_resume(resume_text: str, use_ai: bool = True) -> Dict[str, Any
         
         client = get_llm_client(llm_config)
         if not client:
-            return _extract_resume_heuristic(resume_text)
+            raise RuntimeError("AI resume analysis is unavailable: LLM client initialization failed.")
         
         # Create prompt for structured extraction
         system_prompt = """You are a resume analysis expert. Extract structured information from resumes.
@@ -115,12 +114,13 @@ Return JSON in this format:
                 "bullets": response.json_data.get("bullets", []),
             }
         
-        # Fallback to heuristic
-        return _extract_resume_heuristic(resume_text)
+        raise RuntimeError(response.error or "AI resume analysis returned no structured data.")
         
     except Exception as e:
         print(f"Error in AI resume analysis: {e}")
-        return _extract_resume_heuristic(resume_text)
+        if isinstance(e, RuntimeError):
+            raise
+        raise RuntimeError(f"AI resume analysis failed: {str(e)}")
 
 
 def _extract_resume_heuristic(resume_text: str) -> Dict[str, Any]:

@@ -106,6 +106,10 @@ class JobDatabase:
                     last_seen_at TEXT NOT NULL,
                     
                     raw_data TEXT,  -- JSON
+
+                    -- Deterministic relevance fields (non-AI)
+                    relevance_score REAL,
+                    relevance_reasons TEXT,
                     
                     -- AI-derived fields
                     ai_score REAL,
@@ -123,6 +127,7 @@ class JobDatabase:
                 );
                 
                 CREATE INDEX IF NOT EXISTS idx_jobs_source ON jobs(source);
+                CREATE INDEX IF NOT EXISTS idx_jobs_relevance_score ON jobs(relevance_score);
                 CREATE INDEX IF NOT EXISTS idx_jobs_ai_score ON jobs(ai_score);
                 CREATE INDEX IF NOT EXISTS idx_jobs_company ON jobs(company_normalized);
                 CREATE INDEX IF NOT EXISTS idx_jobs_posted ON jobs(posted_at);
@@ -151,6 +156,19 @@ class JobDatabase:
                     FOREIGN KEY (job_id) REFERENCES jobs(job_id)
                 );
             """)
+
+            # Best-effort additive migrations for existing DBs
+            try:
+                cols = {row["name"] for row in conn.execute("PRAGMA table_info(jobs)").fetchall()}
+                if "relevance_score" not in cols:
+                    conn.execute("ALTER TABLE jobs ADD COLUMN relevance_score REAL")
+                if "relevance_reasons" not in cols:
+                    conn.execute("ALTER TABLE jobs ADD COLUMN relevance_reasons TEXT")
+                conn.execute("CREATE INDEX IF NOT EXISTS idx_jobs_relevance_score ON jobs(relevance_score)")
+            except Exception:
+                # Don't brick local dev if migrations fail
+                pass
+
             conn.commit()
 
     def close(self) -> None:
@@ -271,6 +289,8 @@ class JobDatabase:
                         expires_at = ?,
                         last_seen_at = ?,
                         raw_data = ?,
+                        relevance_score = COALESCE(?, relevance_score),
+                        relevance_reasons = COALESCE(?, relevance_reasons),
                         ai_score = COALESCE(?, ai_score),
                         ai_reasons = COALESCE(?, ai_reasons),
                         ai_remote_type = COALESCE(?, ai_remote_type),
@@ -303,6 +323,8 @@ class JobDatabase:
                     job.founder,
                     posted_at, expires_at, now,
                     raw_data_json,
+                    job.relevance_score,
+                    job.relevance_reasons,
                     job.ai_score, job.ai_reasons, job.ai_remote_type,
                     ai_employment_types_json, job.ai_seniority, job.ai_confidence,
                     job.ai_summary, job.ai_requirements, job.ai_tech_stack,
@@ -327,10 +349,28 @@ class JobDatabase:
                         tags, founder,
                         posted_at, expires_at, first_seen_at, last_seen_at,
                         raw_data,
+                        relevance_score, relevance_reasons,
                         ai_score, ai_reasons, ai_remote_type, ai_employment_types,
                         ai_seniority, ai_confidence, ai_summary, ai_requirements,
                         ai_tech_stack, ai_company_domain, ai_company_summary, ai_flags
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ) VALUES (
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?,
+                        ?,
+                        ?, ?,
+                        ?, ?, ?,
+                        ?, ?, ?,
+                        ?, ?,
+                        ?, ?, ?, ?,
+                        ?,
+                        ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?,
+                        ?, ?, ?, ?
+                    )
                 """, (
                     job.job_id, job.provider_id, job.source, job.source_url,
                     job.title, job.title_normalized, job.company, job.company_normalized,
@@ -349,6 +389,8 @@ class JobDatabase:
                     job.founder,
                     posted_at, expires_at, now, now,
                     raw_data_json,
+                    job.relevance_score,
+                    job.relevance_reasons,
                     job.ai_score, job.ai_reasons, job.ai_remote_type,
                     ai_employment_types_json, job.ai_seniority, job.ai_confidence,
                     job.ai_summary, job.ai_requirements, job.ai_tech_stack,

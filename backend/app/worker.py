@@ -6,6 +6,7 @@ Integrates with the core jobscout scraper.
 
 import asyncio
 import os
+import time
 from typing import Optional
 
 from backend.app.core.config import get_settings
@@ -156,6 +157,44 @@ async def trigger_scrape_run(
         suffix = run_id if run_id is not None else "adhoc"
         db_path = f"temp_scrape_{suffix}.db"
 
+    # Set SerpAPI key and max_pages for serpapi_google_jobs provider (if enabled)
+    if getattr(settings, "serpapi_api_key", None):
+        os.environ["JOBSCOUT_SERPAPI_API_KEY"] = settings.serpapi_api_key
+    provider_env_map = {
+        "themuse_api_key": "JOBSCOUT_THEMUSE_API_KEY",
+        "careerjet_api_key": "JOBSCOUT_CAREERJET_API_KEY",
+        "careerjet_locale_code": "JOBSCOUT_CAREERJET_LOCALE_CODE",
+        "careerjet_user_ip": "JOBSCOUT_CAREERJET_USER_IP",
+        "careerjet_user_agent": "JOBSCOUT_CAREERJET_USER_AGENT",
+        "adzuna_app_id": "JOBSCOUT_ADZUNA_APP_ID",
+        "adzuna_app_key": "JOBSCOUT_ADZUNA_APP_KEY",
+        "adzuna_country": "JOBSCOUT_ADZUNA_COUNTRY",
+        "findwork_api_key": "JOBSCOUT_FINDWORK_API_KEY",
+        "usajobs_api_key": "JOBSCOUT_USAJOBS_API_KEY",
+        "usajobs_user_agent": "JOBSCOUT_USAJOBS_USER_AGENT",
+        "reed_api_key": "JOBSCOUT_REED_API_KEY",
+        "okjob_api_key": "JOBSCOUT_OKJOB_API_KEY",
+        "okjob_api_url": "JOBSCOUT_OKJOB_API_URL",
+        "jobs2careers_api_key": "JOBSCOUT_JOBS2CAREERS_API_KEY",
+        "jobs2careers_api_url": "JOBSCOUT_JOBS2CAREERS_API_URL",
+        "whatjobs_api_key": "JOBSCOUT_WHATJOBS_API_KEY",
+        "whatjobs_api_url": "JOBSCOUT_WHATJOBS_API_URL",
+        "juju_api_key": "JOBSCOUT_JUJU_API_KEY",
+        "juju_api_url": "JOBSCOUT_JUJU_API_URL",
+        "arbeitsamt_client_id": "JOBSCOUT_ARBEITSAMT_CLIENT_ID",
+        "arbeitsamt_client_secret": "JOBSCOUT_ARBEITSAMT_CLIENT_SECRET",
+        "arbeitsamt_token_url": "JOBSCOUT_ARBEITSAMT_TOKEN_URL",
+        "arbeitsamt_api_url": "JOBSCOUT_ARBEITSAMT_API_URL",
+        "open_skills_api_url": "JOBSCOUT_OPEN_SKILLS_API_URL",
+    }
+    for attr_name, env_name in provider_env_map.items():
+        value = getattr(settings, attr_name, None)
+        if value is not None and str(value).strip():
+            os.environ[env_name] = str(value)
+    enabled_set = {p.lower().strip() for p in (settings.enabled_providers or []) if isinstance(p, str)}
+    if "serpapi_google_jobs" in enabled_set:
+        os.environ["JOBSCOUT_SERPAPI_MAX_PAGES"] = str(getattr(settings, "serpapi_max_pages", 1))
+
     ai_config = None
     if use_ai and settings.ai_enabled and settings.openai_api_key:
         os.environ["JOBSCOUT_OPENAI_API_KEY"] = settings.openai_api_key
@@ -239,22 +278,152 @@ async def _backfill_embeddings_for_new_jobs(new_job_count: int) -> None:
         print(f"[Embeddings] Auto-backfill failed (non-fatal): {e}")
 
 
+# Lock to prevent overlapping scheduled scrape ticks.
+_scheduled_lock = asyncio.Lock()
+
+
 async def run_scheduled_scrape():
-    """Run scheduled scrape with default settings."""
+    """Run scheduled scrape: sequential, rotated, non-AI, with lock."""
     settings = get_settings()
-    queries = settings.scheduled_queries or [settings.default_search_query]
-    print(f"[Scheduler] Starting scheduled scrape for {len(queries)} query(ies)")
+    async with _scheduled_lock:
+        await _run_scheduled_scrape_locked(settings)
+
+
+async def _run_scheduled_scrape_locked(settings):
+    """Execute scheduled scrape (caller must hold _scheduled_lock)."""
+    async def _run_selected_queries() -> None:
+        queries = [
+            q.strip()
+            for q in (settings.resolved_scheduled_queries or [])
+            if isinstance(q, str) and q.strip()
+        ]
+        if not queries and settings.default_search_query:
+            queries = [settings.default_search_query]
+        if not queries:
+            print("[Scheduler] No scheduled queries configured; skipping")
+            return
+
+        per_run = max(1, int(settings.scheduled_queries_per_run or 1))
+        max_results = max(1, int(settings.scheduled_scrape_max_results_per_source or 1))
+        concurrency = max(1, int(settings.scheduled_scrape_concurrency or 1))
+
+        # Restart-safe rotation: derive the slice from scheduler tick.
+        interval_hours = max(1, int(settings.scrape_interval_hours or 1))
+        interval_seconds = interval_hours * 3600
+        tick = int(time.time() // interval_seconds)
+        start_idx = (tick * per_run) % len(queries)
+        slice_queries = [queries[(start_idx + i) % len(queries)] for i in range(per_run)]
+
+        print(f"[Scheduler] Starting scheduled scrape for {len(slice_queries)} of {len(queries)} query(ies)")
+
+        try:
+            for query in slice_queries:
+                # Run sequentially (await, don't enqueue) to avoid stacking.
+                run_id = await _run_scheduled_single(
+                    query=query,
+                    location=settings.default_location,
+                    max_results_per_source=max_results,
+                    concurrency=concurrency,
+                )
+                print(f"[Scheduler] Scrape completed: \"{query}\" (run_id={run_id})")
+        except Exception as e:
+            print(f"[Scheduler] Scrape failed: {e}")
+
+    # Postgres advisory lock to prevent multi-instance double-scheduling.
+    if settings.use_sqlite:
+        await _run_selected_queries()
+        return
+
+    from backend.app.core.database import db
+
+    if not db.pool:
+        print("[Scheduler] Database pool unavailable; skipping scheduled run")
+        return
+
+    lock_expr = "hashtext('jobscout_scheduled_scrape')::bigint"
+    async with db.connection() as advisory_conn:
+        acquired = False
+        try:
+            acquired = bool(
+                await advisory_conn.fetchval(
+                    f"SELECT pg_try_advisory_lock({lock_expr})"
+                )
+            )
+            if not acquired:
+                print("[Scheduler] Another instance holds scheduled lock; skipping")
+                return
+
+            await _run_selected_queries()
+        except Exception as e:
+            print(f"[Scheduler] Advisory lock check failed: {e}")
+            return
+        finally:
+            if acquired:
+                try:
+                    await advisory_conn.fetchval(
+                        f"SELECT pg_advisory_unlock({lock_expr})"
+                    )
+                except Exception as e:
+                    print(f"[Scheduler] Failed to release advisory lock: {e}")
+
+
+async def _run_scheduled_single(
+    query: str,
+    location: str,
+    max_results_per_source: int,
+    concurrency: int,
+) -> Optional[int]:
+    """Run a single scheduled scrape synchronously; returns run_id (None when use_sqlite)."""
+    from backend.app.core.config import get_settings
+    from backend.app.core.database import db
+    from backend.app.storage.postgres import start_run, finish_run
+    import json
+
+    settings = get_settings()
+    run_id: Optional[int] = None
+
+    if not settings.use_sqlite and db.pool:
+        criteria_dict = {"query": query, "location": location, "use_ai": False}
+        async with db.connection() as conn:
+            run_id = await start_run(conn, json.dumps(criteria_dict))
 
     try:
-        for query in queries:
-            # Queue as a tracked run (writes to Postgres runs table in production).
-            run_id = await enqueue_scrape_run(
-                query=query,
-                location=settings.default_location,
-                use_ai=False,
-                max_results_per_source=settings.public_scrape_max_results_per_source,
-                concurrency=settings.public_scrape_concurrency,
-            )
-            print(f"[Scheduler] Scrape queued: \"{query}\" (run_id={run_id})")
+        stats = await trigger_scrape_run(
+            query=query,
+            location=location,
+            use_ai=False,
+            max_results_per_source=max_results_per_source,
+            concurrency=concurrency,
+            run_id=run_id,
+        )
+        if run_id is not None and db.pool:
+            async with db.connection() as conn:
+                await finish_run(
+                    conn,
+                    run_id,
+                    jobs_collected=stats.jobs_collected,
+                    jobs_new=stats.jobs_new,
+                    jobs_updated=stats.jobs_updated,
+                    jobs_filtered=stats.jobs_filtered,
+                    errors=stats.errors,
+                    sources=stats.sources or "",
+                )
     except Exception as e:
-        print(f"[Scheduler] Scrape failed: {e}")
+        print(f"[Worker] Scheduled scrape failed: {e}")
+        if run_id is not None and db.pool:
+            try:
+                async with db.connection() as conn:
+                    await finish_run(
+                        conn,
+                        run_id,
+                        jobs_collected=0,
+                        jobs_new=0,
+                        jobs_updated=0,
+                        jobs_filtered=0,
+                        errors=1,
+                        sources="",
+                    )
+            except Exception:
+                pass
+
+    return run_id

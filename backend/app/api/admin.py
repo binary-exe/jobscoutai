@@ -98,7 +98,9 @@ async def trigger_run(
         run_id = await enqueue_scrape_run(
             query=request.query or settings.default_search_query,
             location=request.location or settings.default_location,
-            use_ai=request.use_ai and settings.ai_enabled,
+            # Keep admin-triggered scraping non-AI for predictable cost/latency.
+            # We keep the request field for backwards compatibility.
+            use_ai=False,
         )
         return RunTriggerResponse(
             status="started",

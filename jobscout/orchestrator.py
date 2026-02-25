@@ -38,6 +38,20 @@ from jobscout.providers.wellfound import WellfoundProvider
 from jobscout.providers.stackoverflow import StackOverflowProvider
 from jobscout.providers.indeed import IndeedProvider
 from jobscout.providers.flexjobs import FlexJobsProvider
+from jobscout.providers.serpapi_google_jobs import SerpAPIGoogleJobsProvider
+from jobscout.providers.jobicy import JobicyProvider
+from jobscout.providers.devitjobs_uk import DevITjobsUKProvider
+from jobscout.providers.themuse import TheMuseProvider
+from jobscout.providers.careerjet import CareerjetProvider
+from jobscout.providers.adzuna import AdzunaProvider
+from jobscout.providers.findwork import FindworkProvider
+from jobscout.providers.usajobs import USAJobsProvider
+from jobscout.providers.reed import ReedProvider
+from jobscout.providers.okjob import OkJobProvider
+from jobscout.providers.jobs2careers import Jobs2CareersProvider
+from jobscout.providers.whatjobs import WhatJobsProvider
+from jobscout.providers.juju import JujuProvider
+from jobscout.providers.arbeitsamt import ArbeitsamtProvider
 from jobscout.providers.base import Provider
 
 # Discovery (optional dependency)
@@ -311,6 +325,20 @@ async def run_scrape(
                 "stackoverflow": StackOverflowProvider,
                 "indeed": IndeedProvider,
                 "flexjobs": FlexJobsProvider,
+                "serpapi_google_jobs": SerpAPIGoogleJobsProvider,
+                "jobicy": JobicyProvider,
+                "devitjobs_uk": DevITjobsUKProvider,
+                "themuse": TheMuseProvider,
+                "careerjet": CareerjetProvider,
+                "adzuna": AdzunaProvider,
+                "findwork": FindworkProvider,
+                "usajobs": USAJobsProvider,
+                "reed": ReedProvider,
+                "okjob": OkJobProvider,
+                "jobs2careers": Jobs2CareersProvider,
+                "whatjobs": WhatJobsProvider,
+                "juju": JujuProvider,
+                "arbeitsamt": ArbeitsamtProvider,
             }
 
             # Filter providers if allowlist is specified
@@ -429,6 +457,14 @@ async def run_scrape(
                     ai_config=ai_config,
                     log_fn=log,
                 )
+
+            # ===================== Deterministic Scoring (non-AI) =====================
+            if unique_jobs:
+                try:
+                    from jobscout.scoring import apply_relevance_scoring
+                    apply_relevance_scoring(unique_jobs, criteria)
+                except Exception as e:
+                    log(f"Relevance scoring failed (non-fatal): {e}")
 
             # ===================== Save to Database =====================
             log("Saving to database...")

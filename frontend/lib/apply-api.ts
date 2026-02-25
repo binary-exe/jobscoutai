@@ -9,6 +9,24 @@ import { supabase } from '@/lib/supabase';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
+function formatApiError(status: number, detail?: string): string {
+  const raw = (detail || '').trim();
+  const msg = raw.toLowerCase();
+  const providerOutage =
+    msg.includes('insufficient_quota') ||
+    msg.includes('error code: 429') ||
+    msg.includes('rate limit') ||
+    msg.includes('temporarily unavailable') ||
+    msg.includes('billing') ||
+    msg.includes('credit balance');
+
+  if ((status === 503 && providerOutage) || providerOutage) {
+    return 'AI is temporarily unavailable due to provider quota/capacity. This is not your JobiQueue plan usage. Please try again shortly.';
+  }
+
+  return raw || `HTTP ${status}`;
+}
+
 /**
  * Get the current auth token. Returns null if not authenticated.
  */
@@ -42,7 +60,7 @@ async function apiRequest<T>(
 
   if (!response.ok) {
     const error = await response.json().catch(() => ({ detail: 'Unknown error' }));
-    throw new Error(error.detail || `HTTP ${response.status}`);
+    throw new Error(formatApiError(response.status, error.detail));
   }
 
   return response.json();
@@ -403,6 +421,7 @@ export async function getApplicationInsights(): Promise<ApplicationInsights> {
 
 export type InterviewCoachResult = {
   cached: boolean;
+  fallback?: boolean;
   cache_key: string;
   tokens_used?: number;
   result: {
@@ -413,9 +432,29 @@ export type InterviewCoachResult = {
       what_good_looks_like?: string[];
       red_flags?: string[];
       difficulty?: string;
+      suggested_answer_outline?: string[];
+      study_focus?: string[];
     }>;
     rubric?: Array<{ dimension?: string; how_to_score?: string }>;
     suggested_stories?: Array<{ story_prompt?: string; STAR_outline?: Record<string, string> }>;
+    recommendations?: string[];
+    study_materials?: Array<{
+      topic?: string;
+      why_it_matters?: string;
+      priority?: string;
+      resources?: string[];
+      practice_tasks?: string[];
+    }>;
+    preparation_plan?: Array<{
+      label?: string;
+      objective?: string;
+      actions?: string[];
+    }>;
+    gap_analysis?: {
+      matched?: string[];
+      missing?: string[];
+      notes?: string[];
+    };
     next_steps?: string[];
     [k: string]: unknown;
   };
