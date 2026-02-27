@@ -80,6 +80,7 @@ def _map_generation_runtime_error(*, feature_label: str, message: str) -> HTTPEx
 
 
 async def _fetch_kb_context_for_interview(
+    conn,  # Caller's connection; avoids pool exhaustion and must set SET LOCAL for RLS
     user_id: UUID,
     company: str,
     job_target_id: Optional[UUID],
@@ -99,7 +100,11 @@ async def _fetch_kb_context_for_interview(
         emb_result = await embed_text(question)
         if not emb_result.ok or not emb_result.embedding:
             return ""
-        async with db.connection() as conn:
+        async with conn.transaction():
+            await conn.execute(
+                "SET LOCAL app.current_user_id = $1",
+                str(user_id),
+            )
             chunks = await kb_storage.fetch_similar_chunks(
                 conn,
                 user_id=user_id,
@@ -263,10 +268,11 @@ async def interview_coach(
         if not job_hash:
             job_hash = premium_ai.hash_text(job_text)
 
-        # Best-effort KB context for company notes (non-blocking)
+        # Best-effort KB context for company notes (uses same conn to avoid pool exhaustion)
         kb_context = ""
         try:
             kb_context = await _fetch_kb_context_for_interview(
+                conn,
                 user_id=user_id,
                 company=jt_company or "the company",
                 job_target_id=payload.job_target_id,
@@ -485,4 +491,3 @@ async def create_template(
             "tokens_used": result.tokens_used,
             "result": result.response_json,
         }
-

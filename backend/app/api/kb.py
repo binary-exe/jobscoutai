@@ -8,10 +8,13 @@ and scoped to the current user; RLS uses app.current_user_id per transaction.
 from __future__ import annotations
 
 import json
+import logging
 from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
+
+logger = logging.getLogger(__name__)
 from pydantic import BaseModel, Field, model_validator
 
 from backend.app.core.config import get_settings
@@ -260,21 +263,28 @@ async def kb_query(
             detail=f"Embedding failed: {q_result.error or 'unknown'}",
         )
 
-    async with db.connection() as conn:
-        async with conn.transaction():
-            await conn.execute(
-                "SET LOCAL app.current_user_id = $1",
-                str(user_id),
-            )
-            chunks = await kb_storage.fetch_similar_chunks(
-                conn,
-                user_id=user_id,
-                embedding=q_result.embedding,
-                limit=payload.max_chunks,
-                source_type=payload.source_type,
-                source_table=payload.source_table,
-                source_id=payload.source_id,
-            )
+    try:
+        async with db.connection() as conn:
+            async with conn.transaction():
+                await conn.execute(
+                    "SET LOCAL app.current_user_id = $1",
+                    str(user_id),
+                )
+                chunks = await kb_storage.fetch_similar_chunks(
+                    conn,
+                    user_id=user_id,
+                    embedding=q_result.embedding,
+                    limit=payload.max_chunks,
+                    source_type=payload.source_type,
+                    source_table=payload.source_table,
+                    source_id=payload.source_id,
+                )
+    except Exception as e:
+        logger.warning("KB query fetch failed: %s", e, exc_info=True)
+        raise HTTPException(
+            status_code=502,
+            detail="Knowledge base query failed. Ensure pgvector and KB tables are set up.",
+        ) from e
 
     if not chunks:
         return KbQueryResponse(

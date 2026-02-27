@@ -1387,8 +1387,9 @@ export default function ApplyWorkspacePage() {
                                 max_chunks: 10,
                               });
                               setAskNotesResult(res);
-                            } catch {
-                              setAskNotesResult({ answer: 'Query failed.', citations: [] });
+                            } catch (err) {
+                              const msg = err instanceof Error ? err.message : 'Query failed.';
+                              setAskNotesResult({ answer: msg, citations: [] });
                             } finally {
                               setIsAskingNotes(false);
                             }
