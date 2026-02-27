@@ -144,6 +144,35 @@ async def fetch_similar_chunks(
     ]
 
 
+async def count_documents_for_user(
+    conn: asyncpg.Connection,
+    user_id: UUID,
+    *,
+    source_table: Optional[str] = None,
+) -> int:
+    """Count kb_documents for the user, optionally filtered by source_table."""
+    if source_table is not None:
+        row = await conn.fetchrow(
+            """
+            SELECT COUNT(*)::int AS cnt
+            FROM kb_documents
+            WHERE user_id = $1 AND source_table = $2
+            """,
+            user_id,
+            source_table,
+        )
+    else:
+        row = await conn.fetchrow(
+            """
+            SELECT COUNT(*)::int AS cnt
+            FROM kb_documents
+            WHERE user_id = $1
+            """,
+            user_id,
+        )
+    return row["cnt"] if row else 0
+
+
 async def list_documents(
     conn: asyncpg.Connection,
     user_id: UUID,

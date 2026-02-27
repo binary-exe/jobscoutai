@@ -433,6 +433,8 @@ export type InterviewCoachResult = {
   fallback?: boolean;
   cache_key: string;
   tokens_used?: number;
+  /** True when KB context was used; false when none; undefined for cached (unknown) */
+  kb_context_used?: boolean | null;
   result: {
     questions?: Array<{
       type?: string;
@@ -551,7 +553,8 @@ export interface KbIndexPayload {
   source_id?: string;
   title?: string;
   metadata?: Record<string, unknown>;
-  text: string;
+  /** Required for manual index; omit when source_table + source_id are provided (index from artifact) */
+  text?: string;
 }
 
 export interface KbIndexResponse {

@@ -311,6 +311,8 @@ class Settings(BaseSettings):
 
     # Second Brain (KB) RAG - authenticated per-user knowledge base
     kb_enabled: bool = False
+    # Auto-index job_targets into KB when imported (opt-in; cap 50 per user)
+    kb_auto_index_jobs: bool = False
 
     # Rate limiting
     max_results_per_page: int = 50

@@ -689,6 +689,7 @@ async def generate_interview_coach(
     settings: Settings,
     resume_text: str,
     job_text: str,
+    kb_context: str = "",
 ) -> PremiumAIResult:
     """
     Generate structured interview prep: questions + rubric + suggested stories.
@@ -707,9 +708,19 @@ async def generate_interview_coach(
         "Return strictly valid JSON."
     )
 
+    kb_block = ""
+    if (kb_context or "").strip():
+        kb_block = f"""
+USER'S PRIOR NOTES ABOUT THIS COMPANY (use to personalize prep when relevant):
+{kb_context.strip()}
+
+"""
+    else:
+        kb_block = ""
+
     prompt = f"""
 Create a HIGHLY JOB-SPECIFIC interview prep pack tailored to this exact resume and job description.
-
+{kb_block}
 RESUME (trimmed):
 {resume_text[:9000]}
 
@@ -792,7 +803,8 @@ Hard constraints:
     if payload is None:
         # Retry once with a compact schema to reduce malformed/truncated JSON responses.
         retry_prompt = f"""
-Generate a compact, HIGHLY JOB-SPECIFIC interview prep JSON using this schema only:
+Generate a compact, HIGHLY JOB-SPECIFIC interview prep JSON using this schema only.
+{kb_block}
 {{
   "questions":[{{"type":"technical|behavioral|system_design|role_fit","question":"...","why_they_ask":"...","what_good_looks_like":["..."],"red_flags":["..."],"difficulty":"easy|medium|hard","suggested_answer_outline":["..."],"study_focus":["..."]}}],
   "rubric":[{{"dimension":"communication|technical_depth|ownership|impact|role_alignment","how_to_score":"..."}}],

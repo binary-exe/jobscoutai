@@ -12,16 +12,60 @@ from typing import Any, Dict, List, Optional
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import db
 from backend.app.core.rate_limit import check_rate_limit, kb_index_limiter, kb_query_limiter
 from backend.app.api.apply import require_auth_user
 from backend.app.storage import kb_storage
+from backend.app.storage import apply_storage
 from backend.app.services.embeddings import embed_text
 
 router = APIRouter(prefix="/kb", tags=["kb"])
+
+
+async def _materialize_artifact_text(
+    conn,
+    user_id: UUID,
+    source_table: str,
+    source_id: str,
+) -> tuple[str, str, Optional[str]]:
+    """
+    Fetch artifact from Apply storage and build indexable text.
+    Returns (text, source_type, title).
+    """
+    try:
+        sid = UUID(source_id)
+    except ValueError:
+        raise HTTPException(status_code=400, detail="Invalid source_id format")
+
+    if source_table == "resume_versions":
+        row = await apply_storage.get_resume_version(conn, user_id, sid)
+        if not row:
+            raise HTTPException(status_code=404, detail="Resume not found")
+        text = (row.get("resume_text") or "").strip()
+        return text, "resume", "Resume"
+
+    if source_table == "job_targets":
+        row = await apply_storage.get_job_target(conn, user_id, sid)
+        if not row:
+            raise HTTPException(status_code=404, detail="Job target not found")
+        parts = []
+        if row.get("title"):
+            parts.append(f"Title: {row['title']}")
+        if row.get("company"):
+            parts.append(f"Company: {row['company']}")
+        if row.get("location"):
+            parts.append(f"Location: {row['location']}")
+        if row.get("description_text"):
+            parts.append(f"Description:\n{row['description_text']}")
+        if row.get("job_text"):
+            parts.append(f"Raw:\n{row['job_text']}")
+        text = "\n\n".join(parts).strip()
+        return text, "job_description", row.get("title") or row.get("company") or "Job"
+
+    raise HTTPException(status_code=400, detail=f"Unsupported source_table: {source_table}")
 
 # Chunk size ~500 tokens (≈1500 chars), overlap 100 chars
 KB_CHUNK_SIZE = 1500
@@ -59,12 +103,23 @@ def _chunk_text(text: str) -> List[Dict[str, Any]]:
 
 
 class KbIndexRequest(BaseModel):
-    source_type: str = Field(..., min_length=1, description="e.g. note, resume, job")
+    source_type: str = Field(..., min_length=1, description="e.g. company_research, job_description, resume")
     source_table: Optional[str] = None
     source_id: Optional[str] = None
     title: Optional[str] = None
     metadata: Optional[Dict[str, Any]] = None
-    text: str = Field(..., min_length=1)
+    text: Optional[str] = None  # Required for manual index; when source_table+source_id set, we materialize
+
+    @model_validator(mode="after")
+    def require_text_or_artifact(self) -> "KbIndexRequest":
+        has_text = bool((self.text or "").strip())
+        has_artifact = bool(self.source_table and self.source_id)
+        if not has_text and not has_artifact:
+            raise ValueError("Either text or (source_table + source_id) is required")
+        # Allow text + source_table+source_id for manual_note (associate note with job_target)
+        if has_text and has_artifact and self.source_type != "manual_note":
+            raise ValueError("Provide either text or source_table+source_id, not both")
+        return self
 
 
 class KbIndexResponse(BaseModel):
@@ -115,7 +170,32 @@ async def kb_index(
     _ensure_kb_available()
     check_rate_limit(user_id, kb_index_limiter)
 
-    chunks_raw = _chunk_text(payload.text)
+    text: str
+    source_type: str = payload.source_type
+    title: Optional[str] = payload.title
+    source_table: Optional[str] = payload.source_table
+    source_id: Optional[str] = payload.source_id
+
+    if payload.source_table and payload.source_id and not (payload.text or "").strip():
+        # Materialize from artifact (no custom text)
+        async with db.connection() as conn:
+            text, source_type, default_title = await _materialize_artifact_text(
+                conn, user_id, payload.source_table, payload.source_id
+            )
+            if not title:
+                title = default_title
+        if not text.strip():
+            raise HTTPException(status_code=400, detail="Artifact has no indexable content")
+    else:
+        # Use provided text (manual index, optionally with source_table+source_id for association)
+        text = (payload.text or "").strip()
+        if not text:
+            raise HTTPException(status_code=400, detail="No content to index")
+        if payload.source_table and payload.source_id:
+            source_table = payload.source_table
+            source_id = payload.source_id
+
+    chunks_raw = _chunk_text(text)
     if not chunks_raw:
         raise HTTPException(status_code=400, detail="No content to index after chunking")
 
@@ -143,10 +223,10 @@ async def kb_index(
             doc_id = await kb_storage.insert_document_and_chunks(
                 conn,
                 user_id=user_id,
-                source_type=payload.source_type,
+                source_type=source_type,
                 source_table=payload.source_table,
                 source_id=payload.source_id,
-                title=payload.title,
+                title=title,
                 metadata=payload.metadata,
                 chunks=chunks_with_emb,
             )

@@ -6,7 +6,7 @@ import { Header } from '@/components/Header';
 import { Footer } from '@/components/Footer';
 import { FileText, Link as LinkIcon, Sparkles, CheckCircle2, AlertTriangle, Clock, Loader2, Edit2, Save, Shield, AlertCircle, ExternalLink } from 'lucide-react';
 import Link from 'next/link';
-import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, submitTrustFeedback, uploadResume, importJobFromJobScout, createApplication, getHistory, getJobTarget, generateInterviewCoach, getQuota, type Quota, type ParsedJob, type ApplyPack, type TrustReport, type InterviewCoachResult } from '@/lib/apply-api';
+import { parseJob, updateJobTarget, generateApplyPack, generateTrustReport, submitTrustFeedback, uploadResume, importJobFromJobScout, createApplication, getHistory, getJobTarget, generateInterviewCoach, getQuota, queryKnowledge, indexKnowledgeDocument, type Quota, type ParsedJob, type ApplyPack, type TrustReport, type InterviewCoachResult, type KbQueryResponse } from '@/lib/apply-api';
 import type { JobDetail } from '@/lib/api';
 import { supabase, isSupabaseConfigured } from '@/lib/supabase';
 import { getProfile, getResume } from '@/lib/profile-api';
@@ -49,6 +49,13 @@ export default function ApplyWorkspacePage() {
   const [interviewCoachError, setInterviewCoachError] = useState<string | null>(null);
   const [quota, setQuota] = useState<Quota | null>(null);
   const [quotaLoaded, setQuotaLoaded] = useState(false);
+  const [askNotesQuestion, setAskNotesQuestion] = useState('');
+  const [askNotesResult, setAskNotesResult] = useState<KbQueryResponse | null>(null);
+  const [isAskingNotes, setIsAskingNotes] = useState(false);
+  const [addNoteText, setAddNoteText] = useState('');
+  const [isAddingNote, setIsAddingNote] = useState(false);
+  const [showAddNote, setShowAddNote] = useState(false);
+  const [hashInterviewPrep, setHashInterviewPrep] = useState(false);
 
   // Auth check - redirect to login if not authenticated
   useEffect(() => {
@@ -83,6 +90,29 @@ export default function ApplyWorkspacePage() {
       cancelled = true;
     };
   }, [router, searchParams]);
+
+  // Pre-fill "Ask your notes" with company when parsedJob changes
+  useEffect(() => {
+    if (parsedJob?.company) {
+      setAskNotesQuestion(`What do I know about ${parsedJob.company}?`);
+    }
+  }, [parsedJob?.company]);
+
+  // Track hash on mount and when it changes
+  useEffect(() => {
+    const onHashChange = () => setHashInterviewPrep(window.location.hash === '#interview-prep');
+    onHashChange();
+    window.addEventListener('hashchange', onHashChange);
+    return () => window.removeEventListener('hashchange', onHashChange);
+  }, []);
+
+  // Scroll to Interview Prep section when hash is #interview-prep and content is ready
+  useEffect(() => {
+    if (hashInterviewPrep) {
+      const el = document.getElementById('interview-prep');
+      if (el) el.scrollIntoView({ behavior: 'smooth' });
+    }
+  }, [hashInterviewPrep, parsedJob, applyPack]);
 
   // Load quota/capability flags once authenticated (prevents noisy 404s for disabled Premium AI endpoints)
   useEffect(() => {
@@ -432,7 +462,7 @@ export default function ApplyWorkspacePage() {
       }
     }
     if (q && q.premium_ai_enabled === false) {
-      setInterviewCoachError('Interview Coach is not enabled on this server.');
+      setInterviewCoachError('Interview prep is not enabled on this server.');
       return;
     }
     if (q && q.premium_ai_configured === false) {
@@ -456,15 +486,15 @@ export default function ApplyWorkspacePage() {
         || msg.includes('not available on your plan')
         || msg.includes('403')
       ) {
-        setInterviewCoachError('Interview Coach quota used or not available on your plan. Upgrade for more.');
+        setInterviewCoachError('Interview prep quota used or not available on your plan. Upgrade for more.');
       } else if (msg.includes('404') || msg.includes('disabled')) {
-        setInterviewCoachError('Interview Coach is not enabled on this server.');
+        setInterviewCoachError('Interview prep is not enabled on this server.');
       } else if (msg.includes('not configured')) {
         setInterviewCoachError('AI is not configured. Contact support.');
       } else if (msg.includes('503') || msg.includes('temporarily unavailable')) {
-        setInterviewCoachError('Interview Coach is temporarily unavailable. Please try again in a bit.');
+        setInterviewCoachError('Interview prep is temporarily unavailable. Please try again in a bit.');
       } else if (msg.toLowerCase().includes('invalid response') || msg.toLowerCase().includes('malformed')) {
-        setInterviewCoachError('Interview Coach returned an invalid AI response. Please try again.');
+        setInterviewCoachError('Interview prep returned an invalid AI response. Please try again.');
       } else if (msg.includes('generation failed')) {
         setInterviewCoachError('Interview prep could not be generated right now. Please try again in a moment.');
       } else {
@@ -575,6 +605,18 @@ export default function ApplyWorkspacePage() {
               a Trust Report, and track your applications. Don&apos;t waste time on ghost or scam jobs—check trust first.
             </p>
           </div>
+
+          {/* Empty state when landing on Interview Prep with no job */}
+          {hashInterviewPrep && !parsedJob && (
+            <div className="mb-6 rounded-xl border border-border bg-muted/30 p-6 text-center">
+              <p className="text-muted-foreground">
+                Add a job to get interview prep.
+              </p>
+              <p className="text-sm text-muted-foreground mt-1">
+                Parse a job URL or paste a job description below to get started.
+              </p>
+            </div>
+          )}
 
           {/* Onboarding Banner for First-Time Users */}
           {showOnboarding && (
@@ -1224,11 +1266,11 @@ export default function ApplyWorkspacePage() {
                     </div>
                   )}
 
-                  {/* Interview Coach (auto-generated with Apply Pack) */}
-                  <div className="pt-2 border-t border-border/70">
+                  {/* Interview Prep (auto-generated with Apply Pack) */}
+                  <div id="interview-prep" className="pt-2 border-t border-border/70">
                     <h3 className="text-sm font-medium mb-2 flex items-center gap-2">
                       <Sparkles className="h-4 w-4 text-primary" />
-                      Interview Coach (job-specific)
+                      Interview Prep
                     </h3>
                     {isGeneratingInterviewCoach && (
                       <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -1245,6 +1287,11 @@ export default function ApplyWorkspacePage() {
                         )}
                         {interviewCoachResult.cached && (
                           <p className="text-xs text-muted-foreground">From cache (no additional usage).</p>
+                        )}
+                        {interviewCoachResult.kb_context_used === false && (
+                          <p className="text-xs text-muted-foreground italic">
+                            Add company notes to get more personalized prep next time.
+                          </p>
                         )}
                         {Array.isArray(interviewCoachResult.result.questions) && interviewCoachResult.result.questions.length > 0 && (
                           <div>
@@ -1321,6 +1368,108 @@ export default function ApplyWorkspacePage() {
                     {interviewCoachError && (
                       <div className="mt-2 rounded-lg border border-red-500/50 bg-red-500/10 p-3 text-xs text-red-500">
                         {interviewCoachError}
+                      </div>
+                    )}
+
+                    {/* Ask your notes */}
+                    {parsedJob?.company && (
+                      <div className="mt-4 space-y-2">
+                        <label className="block text-xs font-medium">Ask your notes</label>
+                        <form
+                          onSubmit={async (e) => {
+                            e.preventDefault();
+                            if (!askNotesQuestion.trim()) return;
+                            setIsAskingNotes(true);
+                            setAskNotesResult(null);
+                            try {
+                              const res = await queryKnowledge({
+                                question: askNotesQuestion.trim(),
+                                max_chunks: 10,
+                              });
+                              setAskNotesResult(res);
+                            } catch {
+                              setAskNotesResult({ answer: 'Query failed.', citations: [] });
+                            } finally {
+                              setIsAskingNotes(false);
+                            }
+                          }}
+                          className="flex gap-2"
+                        >
+                          <input
+                            type="text"
+                            value={askNotesQuestion}
+                            onChange={(e) => setAskNotesQuestion(e.target.value)}
+                            placeholder={`What do I know about ${parsedJob.company}?`}
+                            className="flex-1 rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                          />
+                          <button
+                            type="submit"
+                            disabled={isAskingNotes}
+                            className="shrink-0 px-3 py-1.5 rounded-md text-xs bg-muted hover:bg-muted/80 disabled:opacity-50"
+                          >
+                            {isAskingNotes ? '...' : 'Ask'}
+                          </button>
+                        </form>
+                        {askNotesResult && (
+                          <div className="rounded-lg border border-border bg-muted/30 p-3 text-xs">
+                            <p className="whitespace-pre-wrap">{askNotesResult.answer}</p>
+                            {askNotesResult.citations.length > 0 && (
+                              <p className="mt-2 text-muted-foreground">
+                                From {askNotesResult.citations.length} source(s)
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+
+                    {/* Add to prep library */}
+                    {parsedJob?.job_target_id && (
+                      <div className="mt-4">
+                        <button
+                          type="button"
+                          onClick={() => setShowAddNote(!showAddNote)}
+                          className="text-xs text-muted-foreground hover:text-foreground"
+                        >
+                          {showAddNote ? 'Hide' : 'Add to prep library'}
+                        </button>
+                        {showAddNote && (
+                          <form
+                            onSubmit={async (e) => {
+                              e.preventDefault();
+                              if (!addNoteText.trim()) return;
+                              setIsAddingNote(true);
+                              try {
+                                await indexKnowledgeDocument({
+                                  source_type: 'manual_note',
+                                  source_table: 'job_targets',
+                                  source_id: parsedJob.job_target_id,
+                                  text: addNoteText.trim(),
+                                });
+                                setAddNoteText('');
+                                setShowAddNote(false);
+                              } finally {
+                                setIsAddingNote(false);
+                              }
+                            }}
+                            className="mt-2 space-y-2"
+                          >
+                            <textarea
+                              value={addNoteText}
+                              onChange={(e) => setAddNoteText(e.target.value)}
+                              placeholder="Company research, interview notes..."
+                              rows={3}
+                              className="w-full rounded-md border border-input bg-background px-2 py-1.5 text-xs"
+                            />
+                            <button
+                              type="submit"
+                              disabled={isAddingNote}
+                              className="px-3 py-1.5 rounded-md text-xs bg-muted hover:bg-muted/80 disabled:opacity-50"
+                            >
+                              {isAddingNote ? 'Adding…' : 'Save'}
+                            </button>
+                          </form>
+                        )}
                       </div>
                     )}
                   </div>

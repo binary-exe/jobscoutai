@@ -4,6 +4,7 @@ API endpoints for Apply Workspace V1.
 Handles job parsing, trust reports, resume processing, and apply pack generation.
 """
 
+import asyncio
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 from uuid import UUID
@@ -600,6 +601,10 @@ async def parse_job(
             html=job_data.get("html"),  # Store HTML for trust report regeneration
         )
         
+        # Fire-and-forget: auto-index job to KB when opt-in (JOBSCOUT_KB_AUTO_INDEX_JOBS)
+        from backend.app.services.kb_auto_index import maybe_auto_index_job_target
+        asyncio.create_task(maybe_auto_index_job_target(user_id, job_target["job_target_id"]))
+
         return {
             "job_target_id": str(job_target["job_target_id"]),
             "title": job_data.get("title"),
@@ -744,6 +749,10 @@ async def import_job_from_jobscout(
             role_rubric=job_analysis.get("rubric"),
             html=None,  # No HTML since we're importing directly
         )
+
+        # Fire-and-forget: auto-index job to KB when opt-in (JOBSCOUT_KB_AUTO_INDEX_JOBS)
+        from backend.app.services.kb_auto_index import maybe_auto_index_job_target
+        asyncio.create_task(maybe_auto_index_job_target(user_id, job_target["job_target_id"]))
 
         return {
             "job_target_id": str(job_target["job_target_id"]),

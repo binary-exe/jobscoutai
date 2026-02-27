@@ -75,10 +75,10 @@ export function Header() {
             Apply Workspace
           </Link>
           <Link 
-            href="/kb"
+            href="/apply#interview-prep"
             className="px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >
-            Second Brain
+            Interview Prep
           </Link>
           <Link 
             href="/"
