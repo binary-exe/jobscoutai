@@ -68,6 +68,10 @@ apply_pack_limiter = RateLimiter(requests_per_window=10, window_seconds=60)
 # in single-instance setups; for multi-instance, swap to a shared store (e.g. Redis).
 job_capture_limiter = RateLimiter(requests_per_window=30, window_seconds=60 * 60)
 
+# Second Brain (KB): index 20 per hour, query 30 per minute per user
+kb_index_limiter = RateLimiter(requests_per_window=20, window_seconds=60 * 60)
+kb_query_limiter = RateLimiter(requests_per_window=30, window_seconds=60)
+
 
 def check_rate_limit(user_id: UUID, limiter: RateLimiter = apply_pack_limiter) -> None:
     """

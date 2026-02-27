@@ -75,6 +75,12 @@ export function Header() {
             Apply Workspace
           </Link>
           <Link 
+            href="/kb"
+            className="px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
+          >
+            Second Brain
+          </Link>
+          <Link 
             href="/"
             className="px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground"
           >

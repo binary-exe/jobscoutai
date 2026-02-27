@@ -172,7 +172,14 @@ fly secrets set JOBSCOUT_ADMIN_TOKEN="your-secure-token"
 fly secrets set JOBSCOUT_CORS_ORIGINS='["https://your-app.vercel.app"]'
 fly secrets set JOBSCOUT_AI_ENABLED="true"
 fly secrets set JOBSCOUT_OPENAI_API_KEY="sk-..."
+fly secrets set JOBSCOUT_SUPABASE_URL="https://your-project.supabase.co"
+fly secrets set JOBSCOUT_SUPABASE_ANON_KEY="your-anon-key"
+
+# Second Brain (KB) - optional
+fly secrets set JOBSCOUT_KB_ENABLED="true"
 ```
+
+**Note:** Use the **Session pooler** connection string for `JOBSCOUT_DATABASE_URL` (required for KB). See [docs/second_brain_deploy_and_test.md](docs/second_brain_deploy_and_test.md) for full KB setup.
 
 ### 2.4 Create fly.toml
 ```toml

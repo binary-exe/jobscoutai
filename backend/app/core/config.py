@@ -309,6 +309,9 @@ class Settings(BaseSettings):
     embeddings_enabled: bool = False
     openai_embedding_model: str = "text-embedding-3-small"
 
+    # Second Brain (KB) RAG - authenticated per-user knowledge base
+    kb_enabled: bool = False
+
     # Rate limiting
     max_results_per_page: int = 50
 

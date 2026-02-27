@@ -157,6 +157,9 @@ async def init_schema(conn: asyncpg.Connection) -> None:
     # Optional: pgvector personalization migration (best-effort)
     await _exec_sql_file("pgvector_migration_personalization.sql")
 
+    # Optional: pgvector Second Brain (KB) migration (best-effort)
+    await _exec_sql_file("pgvector_migration_second_brain.sql")
+
     # --- Low-cost product analytics (Postgres) ---
     try:
         await conn.execute(

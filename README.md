@@ -268,10 +268,8 @@ Default: all built-in providers are enabled; those without keys simply return 0 
 
 ## 🔒 Privacy
 
-- No user accounts or tracking
-- Jobs are public data from company sites
-- AI processing sends job text to OpenAI (when enabled)
-- No personal data collected
+- **Public job browse**: No account required; jobs are public data from company sites. No personal data is collected for browsing.
+- **Apply Workspace and Second Brain (KB)**: Require sign-in (Supabase). Resumes, job targets, apply packs, and KB documents are stored in Supabase Postgres and scoped to your account. AI processing (when enabled) may send job or document text to OpenAI for ranking, cover letters, or KB answers.
 
 ---
 

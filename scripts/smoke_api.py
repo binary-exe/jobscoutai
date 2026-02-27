@@ -28,6 +28,22 @@ def main():
             print(f"  ERROR: {e}")
             return 0
 
+    def post(url_path: str, body: bytes, *, use_root: bool = False) -> int:
+        path = url_path if url_path.startswith("/") else "/" + url_path
+        url = (root.rstrip("/") + path) if use_root else (base.rstrip("/") + path)
+        req = urllib.request.Request(
+            url, data=body, method="POST",
+            headers={"Content-Type": "application/json"},
+        )
+        try:
+            with urllib.request.urlopen(req, timeout=10) as r:
+                return r.status
+        except urllib.error.HTTPError as e:
+            return e.code
+        except Exception as e:
+            print(f"  ERROR: {e}")
+            return 0
+
     print(f"Smoke testing API at {base}")
 
     # Health
@@ -64,6 +80,21 @@ def main():
     else:
         print(f"FAIL ({status})")
         failed.append("/admin/stats")
+
+    # KB (Second Brain) - expect 401/422 without auth
+    print("  POST /kb/index (no auth) ...", end=" ")
+    status = post("/kb/index", b'{"source_type":"note","text":"test"}', use_root=False)
+    if status in (401, 422):
+        print("OK (auth required)")
+    else:
+        print(f"WARN ({status})")
+
+    print("  POST /kb/query (no auth) ...", end=" ")
+    status = post("/kb/query", b'{"question":"test"}', use_root=False)
+    if status in (401, 422):
+        print("OK (auth required)")
+    else:
+        print(f"WARN ({status})")
 
     if failed:
         print(f"Failed: {failed}")

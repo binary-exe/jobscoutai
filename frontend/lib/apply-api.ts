@@ -9,8 +9,17 @@ import { supabase } from '@/lib/supabase';
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000/api/v1';
 
-function formatApiError(status: number, detail?: string): string {
-  const raw = (detail || '').trim();
+function formatApiError(status: number, detail?: string | unknown): string {
+  let raw: string;
+  if (typeof detail === 'string') {
+    raw = detail.trim();
+  } else if (Array.isArray(detail) && detail.length > 0) {
+    raw = detail.map((d: { msg?: string }) => d?.msg || JSON.stringify(d)).join('; ');
+  } else if (detail != null && typeof detail === 'object') {
+    raw = JSON.stringify(detail);
+  } else {
+    raw = '';
+  }
   const msg = raw.toLowerCase();
   const providerOutage =
     msg.includes('insufficient_quota') ||
@@ -532,4 +541,57 @@ export async function getApplicationFeedback(applicationId: string): Promise<{ f
 export async function isAuthenticated(): Promise<boolean> {
   const token = await getAuthToken();
   return !!token;
+}
+
+// --- Second Brain (KB) RAG ---
+
+export interface KbIndexPayload {
+  source_type: string;
+  source_table?: string;
+  source_id?: string;
+  title?: string;
+  metadata?: Record<string, unknown>;
+  text: string;
+}
+
+export interface KbIndexResponse {
+  document_id: string;
+  chunks_indexed: number;
+}
+
+export interface KbCitation {
+  chunk_id: string;
+  document_id: string;
+  source_type: string;
+  source_id: string;
+  page: number | null;
+  score: number;
+  snippet: string;
+}
+
+export interface KbQueryPayload {
+  question: string;
+  source_type?: string;
+  source_table?: string;
+  source_id?: string;
+  max_chunks?: number;
+}
+
+export interface KbQueryResponse {
+  answer: string;
+  citations: KbCitation[];
+}
+
+export async function indexKnowledgeDocument(payload: KbIndexPayload): Promise<KbIndexResponse> {
+  return apiRequest<KbIndexResponse>('/kb/index', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function queryKnowledge(payload: KbQueryPayload): Promise<KbQueryResponse> {
+  return apiRequest<KbQueryResponse>('/kb/query', {
+    method: 'POST',
+    body: JSON.stringify(payload),
+  });
 }

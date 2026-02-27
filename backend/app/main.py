@@ -15,7 +15,7 @@ from starlette.responses import Response as StarletteResponse
 
 from backend.app.core.config import get_settings
 from backend.app.core.database import db
-from backend.app.api import jobs, admin, apply, paddle, scrape, runs, profile, referrals, saved_searches, metrics, premium_ai
+from backend.app.api import jobs, admin, apply, paddle, scrape, runs, profile, referrals, saved_searches, metrics, premium_ai, kb
 
 
 @asynccontextmanager
@@ -181,6 +181,7 @@ def create_app() -> FastAPI:
     app.include_router(saved_searches.router, prefix=settings.api_prefix)
     app.include_router(metrics.router, prefix=settings.api_prefix)
     app.include_router(premium_ai.router, prefix=settings.api_prefix)
+    app.include_router(kb.router, prefix=settings.api_prefix)
 
     @app.get("/")
     async def root():
